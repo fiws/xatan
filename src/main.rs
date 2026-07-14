@@ -1,0 +1,625 @@
+use clap::{Parser, Subcommand};
+use std::io::IsTerminal;
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::Command;
+
+mod config;
+mod identity;
+mod prompt;
+mod xata;
+mod cache;
+
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "xatan",
+    version,
+    about = "Developer-centric helper for isolated, conflict-free Xata database branch orchestration"
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Sets up the workspace configuration file (.xatanrc)
+    Init,
+
+    /// Outputs the resolved developer identity
+    Whoami,
+
+    /// Resolves and prints the connection URL for a database branch
+    Url {
+        /// The suffix of the target branch. Defaults to current Git branch counterpart.
+        name: Option<String>,
+
+        /// Auto-create the branch in Xata if it does not exist
+        #[arg(long)]
+        create: bool,
+
+        /// The parent branch to clone from if creating
+        #[arg(long)]
+        parent: Option<String>,
+    },
+
+    /// Creates a new isolated Xata branch prefixed with your identity
+    Create {
+        /// The clean suffix of the branch to create
+        name: String,
+
+        /// Parent branch to clone from
+        #[arg(long)]
+        parent: Option<String>,
+    },
+
+    /// Lists project database branches, highlighting your own
+    List {
+        /// Only show branches matching your developer prefix
+        #[arg(long, conflicts_with = "all")]
+        mine: bool,
+
+        /// Show all branches, including other developers
+        #[arg(long, conflicts_with = "mine")]
+        all: bool,
+    },
+
+    /// Re-clones or re-syncs schema/data from a parent branch
+    Sync {
+        /// The suffix of the branch to sync. Defaults to current Git branch counterpart.
+        name: Option<String>,
+
+        /// The parent branch to re-sync from
+        #[arg(long)]
+        from: Option<String>,
+
+        /// Bypass safety confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
+
+    /// Deletes a developer branch safely
+    Delete {
+        /// The suffix of the branch to delete. Defaults to current Git branch counterpart.
+        name: Option<String>,
+
+        /// Bypass safety confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
+
+    /// Launches an interactive psql connection targeting the resolved branch
+    Shell {
+        /// The suffix of the branch to open. Defaults to current Git branch counterpart.
+        name: Option<String>,
+    },
+}
+
+/// Query current active local Jujutsu bookmark/revision or Git branch
+fn get_current_vcs_branch_or_bookmark() -> Option<String> {
+    // 1. Try Jujutsu (jj) first
+    let jj_output = Command::new("jj")
+        .args([
+            "log",
+            "-r",
+            "@",
+            "-T",
+            "coalesce(local_bookmarks, change_id.short(12))",
+            "--no-graph",
+            "--color=never",
+        ])
+        .output();
+
+    if let Ok(output) = jj_output {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+
+    // 2. Fallback to Git
+    Command::new("git")
+        .args(["branch", "--show-current"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Recursively searches for repository root by looking for .git or .jj traversing up
+fn find_repository_root() -> Option<PathBuf> {
+    let mut current_dir = std::env::current_dir().ok()?;
+    loop {
+        if current_dir.join(".git").exists() || current_dir.join(".jj").exists() {
+            return Some(current_dir);
+        }
+        if !current_dir.pop() {
+            break;
+        }
+    }
+    std::env::current_dir().ok()
+}
+
+/// Resolves full target branch name `<prefix>-<suffix>` using Smart Identity Resolution Algorithm
+fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
+    let prefix = identity::resolve_identity()?;
+    let suffix = if let Some(n) = name_arg {
+        identity::slugify(n)
+    } else {
+        let vcs_ref = get_current_vcs_branch_or_bookmark()
+            .ok_or_else(|| "Failed to query current Git branch or Jujutsu bookmark. Please specify branch name argument.".to_string())?;
+        identity::slugify(&vcs_ref)
+    };
+
+    if suffix.is_empty() {
+        return Err("Resolved target branch suffix is empty".to_string());
+    }
+
+    Ok(format!("{}-{}", prefix, suffix))
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Init => {
+            if let Err(e) = run_init() {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Commands::Whoami => {
+            match identity::resolve_identity() {
+                Ok(prefix) => {
+                    println!("{}", prefix);
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Url { name, create, parent } => {
+            let config = resolve_or_exit();
+            let branch_name = match resolve_target_branch(name.as_deref()) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // 1. Check local cache first for sub-millisecond retrieval
+            if let Some(cached_url) = cache::get_cached_url(&branch_name) {
+                println!("{}", cached_url);
+                std::process::exit(0);
+            }
+
+            let client = xata::XataClient::new(&config);
+            match client.get_branch(&branch_name) {
+                Ok(Some(branch)) => {
+                    if let Some(conn_str) = branch.connection_string {
+                        let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                        // Save to cache
+                        cache::set_cached_url(&branch_name, &rewritten);
+                        println!("{}", rewritten);
+                        std::process::exit(0);
+                    } else {
+                        eprintln!("Error: Branch '{}' exists but has no connection URL.", branch_name);
+                        std::process::exit(1);
+                    }
+                }
+                Ok(None) => {
+                    if create {
+                        let parent_branch = parent.as_deref().unwrap_or(&config.fallback_parent);
+                        let parent_id = resolve_parent_id(&client, parent_branch);
+                        let _ = prompt::intro("xatan url");
+                        let spinner = prompt::spinner();
+                        spinner.start(format!("Creating branch '{}' from '{}'...", branch_name, parent_branch));
+
+                        match client.create_branch(&branch_name, Some(&parent_id)) {
+                            Ok(created_branch) => {
+                                spinner.stop("Branch created.");
+                                if let Some(conn_str) = created_branch.connection_string {
+                                    let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                                    // Save to cache
+                                    cache::set_cached_url(&branch_name, &rewritten);
+                                    println!("{}", rewritten);
+                                    std::process::exit(0);
+                                } else {
+                                    // Fallback retry getting detailed branch
+                                    match client.get_branch(&branch_name) {
+                                        Ok(Some(re_fetched)) => {
+                                            if let Some(conn_str) = re_fetched.connection_string {
+                                                let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                                                // Save to cache
+                                                cache::set_cached_url(&branch_name, &rewritten);
+                                                println!("{}", rewritten);
+                                                std::process::exit(0);
+                                            } else {
+                                                eprintln!("Error: Branch created, but connection URL is not available.");
+                                                std::process::exit(1);
+                                            }
+                                        }
+                                        _ => {
+                                            eprintln!("Error: Created branch but failed to retrieve credentials.");
+                                            std::process::exit(1);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                spinner.stop("Creation failed.");
+                                eprintln!("API Error: {}", e);
+                                std::process::exit(1);
+                            }
+                        }
+                    } else {
+                        eprintln!("Error: Branch '{}' does not exist. Use --create to create it dynamically.", branch_name);
+                        std::process::exit(2);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Create { name, parent } => {
+            let config = resolve_or_exit();
+            let branch_name = match resolve_target_branch(Some(&name)) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let client = xata::XataClient::new(&config);
+            match client.get_branch(&branch_name) {
+                Ok(Some(_)) => {
+                    eprintln!("Warning: Branch '{}' already exists.", branch_name);
+                    println!("{}", branch_name);
+                    std::process::exit(0);
+                }
+                Ok(None) => {
+                    let parent_branch = parent.as_deref().unwrap_or(&config.fallback_parent);
+                    let parent_id = resolve_parent_id(&client, parent_branch);
+                    let _ = prompt::intro("xatan create");
+                    let spinner = prompt::spinner();
+                    spinner.start(format!("Creating branch '{}' from '{}'...", branch_name, parent_branch));
+
+                    match client.create_branch(&branch_name, Some(&parent_id)) {
+                        Ok(_) => {
+                            spinner.stop("Branch created.");
+                            println!("{}", branch_name);
+                            std::process::exit(0);
+                        }
+                        Err(e) => {
+                            spinner.stop("Creation failed.");
+                            eprintln!("API Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::List { mine, all: _ } => {
+            let config = resolve_or_exit();
+            let prefix = match identity::resolve_identity() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let client = xata::XataClient::new(&config);
+            let mut branches = match client.list_branches() {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            branches.sort_by(|a, b| {
+                let a_is_mine = a.name.starts_with(&prefix);
+                let b_is_mine = b.name.starts_with(&prefix);
+                if a_is_mine != b_is_mine {
+                    b_is_mine.cmp(&a_is_mine)
+                } else {
+                    a.name.cmp(&b.name)
+                }
+            });
+
+            if mine {
+                branches.retain(|b| b.name.starts_with(&prefix));
+            }
+
+            if branches.is_empty() {
+                println!("No branches found.");
+                std::process::exit(0);
+            }
+
+            let is_atty = std::io::stdout().is_terminal();
+            let active_branch = resolve_target_branch(None).ok();
+
+            let mut max_name_len = 11;
+            let mut max_parent_len = 6;
+            let mut max_created_len = 10;
+
+            for b in &branches {
+                max_name_len = max_name_len.max(b.name.len());
+                max_parent_len = max_parent_len.max(b.parent_id.as_deref().unwrap_or("").len());
+                max_created_len = max_created_len.max(b.created_at.as_deref().unwrap_or("").len());
+            }
+
+            let header = format!(
+                "    {:width_name$} | {:width_parent$} | {:width_created$}",
+                "Branch Name", "Parent", "Created At",
+                width_name = max_name_len,
+                width_parent = max_parent_len,
+                width_created = max_created_len
+            );
+            let divider = "-".repeat(header.len());
+
+            println!("{}", header);
+            println!("{}", divider);
+
+            for b in &branches {
+                let is_mine = b.name.starts_with(&prefix);
+                let is_active = Some(&b.name) == active_branch.as_ref();
+                let indicator = if is_active {
+                    "[*]"
+                } else if is_mine {
+                    " * "
+                } else {
+                    "   "
+                };
+                let parent_str = b.parent_id.as_deref().unwrap_or("-");
+                let created_str = b.created_at.as_deref().unwrap_or("-");
+
+                let row = format!(
+                    "{} {:width_name$} | {:width_parent$} | {:width_created$}",
+                    indicator, b.name, parent_str, created_str,
+                    width_name = max_name_len,
+                    width_parent = max_parent_len,
+                    width_created = max_created_len
+                );
+
+                if is_mine && is_atty {
+                    println!("\x1b[1;32m{}\x1b[0m", row);
+                } else {
+                    println!("{}", row);
+                }
+            }
+        }
+        Commands::Sync { name, from, yes } => {
+            let config = resolve_or_exit();
+            let branch_name = match resolve_target_branch(name.as_deref()) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let from_parent = from.as_deref().unwrap_or(&config.fallback_parent);
+
+            if !yes {
+                let _ = prompt::intro("xatan sync");
+                let msg = format!(
+                    "Are you sure you want to re-sync branch '{}'? This will delete ALL its data and re-branch from '{}'.",
+                    branch_name, from_parent
+                );
+                match prompt::prompt_confirm(&msg, false) {
+                    Ok(true) => {}
+                    _ => {
+                        eprintln!("Operation aborted.");
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            let client = xata::XataClient::new(&config);
+            let from_parent_id = resolve_parent_id(&client, from_parent);
+            let spinner = prompt::spinner();
+            spinner.start(format!("Synchronizing '{}'...", branch_name));
+
+            spinner.set_message("Tearing down old branch...");
+            if let Err(e) = client.delete_branch(&branch_name) {
+                if !e.contains("404") && !e.to_lowercase().contains("not found") {
+                    spinner.stop("Teardown failed.");
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+
+            spinner.set_message(format!("Cloning new branch from '{}'...", from_parent));
+            match client.create_branch(&branch_name, Some(&from_parent_id)) {
+                Ok(created) => {
+                    spinner.stop("Synchronization complete.");
+                    if let Some(conn_str) = created.connection_string {
+                        let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                        cache::set_cached_url(&branch_name, &rewritten);
+                    }
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    spinner.stop("Cloning failed.");
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Delete { name, yes } => {
+            let config = resolve_or_exit();
+            let branch_name = match resolve_target_branch(name.as_deref()) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            if !yes {
+                let _ = prompt::intro("xatan delete");
+                let msg = format!("Are you sure you want to permanently delete branch '{}'?", branch_name);
+                match prompt::prompt_confirm(&msg, false) {
+                    Ok(true) => {}
+                    _ => {
+                        eprintln!("Operation aborted.");
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            let client = xata::XataClient::new(&config);
+            let spinner = prompt::spinner();
+            spinner.start(format!("Deleting branch '{}'...", branch_name));
+
+            match client.delete_branch(&branch_name) {
+                Ok(_) => {
+                    spinner.stop("Branch deleted.");
+                    cache::remove_cached_url(&branch_name);
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    spinner.stop("Deletion failed.");
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Commands::Shell { name } => {
+            let config = resolve_or_exit();
+            let branch_name = match resolve_target_branch(name.as_deref()) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Check cache first for sub-millisecond psql startup
+            if let Some(cached_url) = cache::get_cached_url(&branch_name) {
+                let err = Command::new("psql")
+                    .arg(cached_url)
+                    .exec();
+                eprintln!("Failed to execute psql: {}", err);
+                std::process::exit(1);
+            }
+
+            let client = xata::XataClient::new(&config);
+            match client.get_branch(&branch_name) {
+                Ok(Some(branch)) => {
+                    if let Some(conn_str) = branch.connection_string {
+                        let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                        // Save to cache
+                        cache::set_cached_url(&branch_name, &rewritten);
+                        let err = Command::new("psql")
+                            .arg(rewritten)
+                            .exec();
+                        eprintln!("Failed to execute psql: {}", err);
+                        std::process::exit(1);
+                    } else {
+                        eprintln!("Error: Branch '{}' exists but has no connection URL.", branch_name);
+                        std::process::exit(1);
+                    }
+                }
+                Ok(None) => {
+                    eprintln!("Error: Branch '{}' does not exist.", branch_name);
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+/// Helper to resolve configurations, exiting with exit code 3 on failure
+fn resolve_or_exit() -> config::ResolvedConfig {
+    match config::resolve_config() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Authentication / Config Missing: {}", e);
+            std::process::exit(3);
+        }
+    }
+}
+
+/// Interactive initialization session
+fn run_init() -> Result<(), String> {
+    let defaults = config::get_xata_defaults();
+
+    prompt::intro("xatan init").map_err(|e| e.to_string())?;
+
+    let org = prompt::prompt_text("Organization ID", defaults.0.as_deref())?;
+    let project = prompt::prompt_text("Project ID", defaults.1.as_deref())?;
+    let database = prompt::prompt_text("Database Name", defaults.2.as_deref())?;
+
+    if org.trim().is_empty() || project.trim().is_empty() || database.trim().is_empty() {
+        return Err("Organization ID, Project ID, and Database Name are all required fields.".to_string());
+    }
+
+    let root = find_repository_root().ok_or_else(|| "Failed to resolve repository root".to_string())?;
+    let config_path = root.join(".xatanrc");
+
+    let payload = config::XatanConfig {
+        org: Some(org.trim().to_string()),
+        project: Some(project.trim().to_string()),
+        database: Some(database.trim().to_string()),
+        fallback_parent: Some("main".to_string()),
+    };
+
+    let config_json = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+
+    std::fs::write(&config_path, config_json)
+        .map_err(|e| format!("Failed to write configuration file {}: {}", config_path.display(), e))?;
+
+    prompt::outro("Successfully initialized .xatanrc!").map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Resolves parent branch name (e.g. "main") to its unique branch ID
+fn resolve_parent_id(client: &xata::XataClient, parent_name: &str) -> String {
+    if let Ok(branches) = client.list_branches() {
+        if let Some(b) = branches.iter().find(|b| b.name == parent_name || b.id == parent_name) {
+            return b.id.clone();
+        }
+    }
+    parent_name.to_string()
+}
+
+/// Rewrites the database name path segment in the connection URL to match XATA_DATABASE_NAME
+fn rewrite_connection_string(conn_str: &str, db_name: &str) -> String {
+    if let Some(scheme_idx) = conn_str.find("://") {
+        let rest = &conn_str[scheme_idx + 3..];
+        if let Some(slash_idx) = rest.find('/') {
+            let path_and_query = &rest[slash_idx + 1..];
+            let end_idx = path_and_query.find('?')
+                .or_else(|| path_and_query.find('#'))
+                .unwrap_or(path_and_query.len());
+            let query_part = &path_and_query[end_idx..];
+            let host_part = &rest[..slash_idx];
+            let scheme = &conn_str[..scheme_idx + 3];
+            return format!("{}{}/{}{}", scheme, host_part, db_name, query_part);
+        }
+    }
+    conn_str.to_string()
+}
