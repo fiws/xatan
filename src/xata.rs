@@ -30,7 +30,7 @@ pub struct XataClient {
     api_key: String,
     org: String,
     project: String,
-    client: reqwest::blocking::Client,
+    client: ureq::Agent,
 }
 
 impl XataClient {
@@ -40,7 +40,7 @@ impl XataClient {
             api_key: config.api_key.clone(),
             org: config.org.clone(),
             project: config.project.clone(),
-            client: reqwest::blocking::Client::new(),
+            client: ureq::Agent::new(),
         }
     }
 
@@ -51,13 +51,13 @@ impl XataClient {
         self
     }
 
-    fn client(&self) -> &reqwest::blocking::Client {
+    fn client(&self) -> &ureq::Agent {
         &self.client
     }
 
-    fn handle_error_response(&self, response: reqwest::blocking::Response) -> String {
+    fn handle_error_response(&self, response: ureq::Response) -> String {
         let status = response.status();
-        let text = response.text().unwrap_or_default();
+        let text = response.into_string().unwrap_or_default();
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
             if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
                 return format!("Xata API error ({}): {}", status, msg);
@@ -83,21 +83,24 @@ impl XataClient {
             self.base_url, self.org, self.project, target_id
         );
 
-        let response = self.client()
+        let response = match self.client()
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .send()
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .call() {
+                Ok(resp) => resp,
+                Err(ureq::Error::Status(_code, resp)) => resp,
+                Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            };
 
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
+        if response.status() == 404 {
             return Ok(None);
         }
 
-        if !response.status().is_success() {
+        if response.status() < 200 || response.status() >= 300 {
             return Err(self.handle_error_response(response));
         }
 
-        let branch: XataBranch = response.json()
+        let branch: XataBranch = response.into_json()
             .map_err(|e| format!("Failed to parse branch details response: {}", e))?;
 
         Ok(Some(branch))
@@ -116,18 +119,20 @@ impl XataClient {
             parent_id: parent_branch.map(|s| s.to_string()),
         };
 
-        let response = self.client()
+        let response = match self.client()
             .post(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&payload)
-            .send()
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .send_json(&payload) {
+                Ok(resp) => resp,
+                Err(ureq::Error::Status(_code, resp)) => resp,
+                Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            };
 
-        if !response.status().is_success() {
+        if response.status() < 200 || response.status() >= 300 {
             return Err(self.handle_error_response(response));
         }
 
-        let branch: XataBranch = response.json()
+        let branch: XataBranch = response.into_json()
             .map_err(|e| format!("Failed to parse create branch response: {}", e))?;
 
         Ok(branch)
@@ -149,17 +154,20 @@ impl XataClient {
             self.base_url, self.org, self.project, target_id
         );
 
-        let response = self.client()
+        let response = match self.client()
             .delete(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .send()
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .call() {
+                Ok(resp) => resp,
+                Err(ureq::Error::Status(_code, resp)) => resp,
+                Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            };
 
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
+        if response.status() == 404 {
             return Ok(());
         }
 
-        if !response.status().is_success() {
+        if response.status() < 200 || response.status() >= 300 {
             return Err(self.handle_error_response(response));
         }
 
@@ -173,17 +181,20 @@ impl XataClient {
             self.base_url, self.org, self.project
         );
 
-        let response = self.client()
+        let response = match self.client()
             .get(&url)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .send()
-            .map_err(|e| format!("HTTP request failed: {}", e))?;
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .call() {
+                Ok(resp) => resp,
+                Err(ureq::Error::Status(_code, resp)) => resp,
+                Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            };
 
-        if !response.status().is_success() {
+        if response.status() < 200 || response.status() >= 300 {
             return Err(self.handle_error_response(response));
         }
 
-        let res: XataBranchesResponse = response.json()
+        let res: XataBranchesResponse = response.into_json()
             .map_err(|e| format!("Failed to parse list branches response: {}", e))?;
 
         Ok(res.branches)
