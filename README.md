@@ -44,7 +44,7 @@ XATA_DATABASE_NAME="your-db"
 - **`whoami`**: Print your unique developer identity prefix (e.g., `me-fiws-net`).
 - **`url [NAME] [--create]`**: Print the Postgres connection string for a branch. Auto-creates it if `--create` is set.
 - **`create <NAME> [--parent <BRANCH>]`**: Create an isolated branch cloned from a parent.
-- **`list [--mine] [--all]`**: List database branches, highlighting your own.
+- **`list [--mine] [--all]`**: List database branches, showing only your own by default.
 - **`sync [NAME] [--from <BRANCH>] [-y]`**: Re-clone schema and data from a parent.
 - **`delete [NAME] [-y]`**: Delete a branch safely.
 - **`shell [NAME]`**: Open an interactive `psql` connection.

@@ -58,10 +58,9 @@ enum Commands {
         #[arg(long)]
         skip_post_create: bool,
     },
-
-    /// Lists project database branches, highlighting your own
+    /// Lists project database branches, showing only your own by default
     List {
-        /// Only show branches matching your developer prefix
+        /// Only show branches matching your developer prefix [default]
         #[arg(long, conflicts_with = "all")]
         mine: bool,
 
@@ -69,7 +68,6 @@ enum Commands {
         #[arg(long, conflicts_with = "mine")]
         all: bool,
     },
-
     Sync {
         /// The suffix of the branch to sync. Defaults to current Git branch counterpart.
         name: Option<String>,
@@ -480,7 +478,7 @@ fn main() {
                 }
             }
         }
-        Commands::List { mine, all: _ } => {
+        Commands::List { mine: _, all } => {
             let config = resolve_or_exit();
             let prefix = match identity::resolve_identity() {
                 Ok(p) => p,
@@ -509,7 +507,7 @@ fn main() {
                 }
             });
 
-            if mine {
+            if !all {
                 branches.retain(|b| b.name.starts_with(&prefix));
             }
 

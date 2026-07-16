@@ -255,7 +255,7 @@ OPTIONS:
 ---
 
 ### 4.5. `list`
-Lists project database branches, highlighting the developer's own.
+Lists project database branches, showing only the developer's own by default.
 
 ```text
 xatan-list 
@@ -265,8 +265,8 @@ USAGE:
     xatan list [OPTIONS]
 
 OPTIONS:
-    --mine    Only show branches matching your developer prefix
-    --all     Show all branches, including other developers [default]
+    --mine    Only show branches matching your developer prefix [default]
+    --all     Show all branches, including other developers
 ```
 
 * **Behavior:**
