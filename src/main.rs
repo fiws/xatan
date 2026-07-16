@@ -29,6 +29,7 @@ enum Commands {
     /// Outputs the resolved developer identity
     Whoami,
 
+    /// Resolves and prints the connection URL for a database branch
     Url {
         /// The suffix of the target branch. Defaults to current Git branch counterpart.
         name: Option<String>,
@@ -46,6 +47,7 @@ enum Commands {
         skip_post_create: bool,
     },
 
+    /// Creates a new isolated Xata branch prefixed with your identity
     Create {
         /// The clean suffix of the branch to create
         name: String,
@@ -68,6 +70,7 @@ enum Commands {
         #[arg(long, conflicts_with = "mine")]
         all: bool,
     },
+    /// Re-clones or re-syncs schema/data from a parent branch
     Sync {
         /// The suffix of the branch to sync. Defaults to current Git branch counterpart.
         name: Option<String>,
