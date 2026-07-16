@@ -545,10 +545,18 @@ fn main() {
             let mut max_parent_len = 6;
             let mut max_created_len = 10;
 
+            let mut formatted_branches = Vec::new();
             for b in &branches {
+                let is_mine = b.name.starts_with(&prefix);
+                let is_active = Some(&b.name) == active_branch.as_ref();
+                let parent_str = b.parent_id.as_deref().unwrap_or("-").to_string();
+                let created_str = b.created_at.as_deref().map(|s| humanize_time_ago(s)).unwrap_or_else(|| "-".to_string());
+
                 max_name_len = max_name_len.max(b.name.len());
-                max_parent_len = max_parent_len.max(b.parent_id.as_deref().unwrap_or("").len());
-                max_created_len = max_created_len.max(b.created_at.as_deref().unwrap_or("").len());
+                max_parent_len = max_parent_len.max(parent_str.len());
+                max_created_len = max_created_len.max(created_str.len());
+
+                formatted_branches.push((b, is_mine, is_active, parent_str, created_str));
             }
 
             let header = format!(
@@ -565,9 +573,7 @@ fn main() {
             println!("{}", header);
             println!("{}", divider);
 
-            for b in &branches {
-                let is_mine = b.name.starts_with(&prefix);
-                let is_active = Some(&b.name) == active_branch.as_ref();
+            for (b, is_mine, is_active, parent_str, created_str) in formatted_branches {
                 let indicator = if is_active {
                     "[*]"
                 } else if is_mine {
@@ -575,8 +581,6 @@ fn main() {
                 } else {
                     "   "
                 };
-                let parent_str = b.parent_id.as_deref().unwrap_or("-");
-                let created_str = b.created_at.as_deref().unwrap_or("-");
 
                 let row = format!(
                     "{} {:width_name$} | {:width_parent$} | {:width_created$}",
@@ -941,9 +945,118 @@ fn run_post_create_hook(
     Ok(())
 }
 
+pub fn humanize_time_ago(date_str: &str) -> String {
+    let parsed = match chrono::DateTime::parse_from_rfc3339(date_str) {
+        Ok(dt) => dt,
+        Err(_) => return date_str.to_string(),
+    };
+    let now = chrono::Utc::now();
+    let duration = now.signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    let secs = duration.num_seconds();
+
+    if secs < 0 {
+        return "just now".to_string();
+    }
+    if secs < 60 {
+        return "just now".to_string();
+    }
+    let mins = secs / 60;
+    if mins < 60 {
+        if mins == 1 {
+            return "1 minute ago".to_string();
+        } else {
+            return format!("{} minutes ago", mins);
+        }
+    }
+    let hours = mins / 60;
+    if hours < 24 {
+        if hours == 1 {
+            return "1 hour ago".to_string();
+        } else {
+            return format!("{} hours ago", hours);
+        }
+    }
+    let days = hours / 24;
+    if days < 30 {
+        if days == 1 {
+            return "1 day ago".to_string();
+        } else {
+            return format!("{} days ago", days);
+        }
+    }
+    let months = days / 30;
+    if months < 12 {
+        if months == 1 {
+            return "1 month ago".to_string();
+        } else {
+            return format!("{} months ago", months);
+        }
+    }
+    let years = days / 365;
+    if years == 1 {
+        "1 year ago".to_string()
+    } else {
+        format!("{} years ago", years)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_humanize_time_ago() {
+        use chrono::{Duration, Utc};
+
+        let now = Utc::now();
+
+        // 10 seconds ago -> "just now"
+        let t1 = (now - Duration::seconds(10)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t1), "just now");
+
+        // 45 seconds ago -> "just now"
+        let t2 = (now - Duration::seconds(45)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t2), "just now");
+
+        // 2 minutes ago -> "2 minutes ago"
+        let t3 = (now - Duration::minutes(2)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t3), "2 minutes ago");
+
+        // 1 hour ago -> "1 hour ago"
+        let t4 = (now - Duration::hours(1)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t4), "1 hour ago");
+
+        // 3 hours ago -> "3 hours ago"
+        let t5 = (now - Duration::hours(3)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t5), "3 hours ago");
+
+        // 1 day ago -> "1 day ago"
+        let t6 = (now - Duration::days(1)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t6), "1 day ago");
+
+        // 5 days ago -> "5 days ago"
+        let t7 = (now - Duration::days(5)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t7), "5 days ago");
+
+        // 1 month ago (approx 30 days) -> "1 month ago"
+        let t8 = (now - Duration::days(30)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t8), "1 month ago");
+
+        // 3 months ago (approx 90 days) -> "3 months ago"
+        let t9 = (now - Duration::days(90)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t9), "3 months ago");
+
+        // 1 year ago (approx 365 days) -> "1 year ago"
+        let t10 = (now - Duration::days(365)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t10), "1 year ago");
+
+        // 2 years ago (approx 730 days) -> "2 years ago"
+        let t11 = (now - Duration::days(730)).to_rfc3339();
+        assert_eq!(humanize_time_ago(&t11), "2 years ago");
+
+        // Invalid format fallback
+        assert_eq!(humanize_time_ago("invalid"), "invalid");
+    }
+
 
     #[test]
     fn test_resolve_target_branch_already_prefixed() {
