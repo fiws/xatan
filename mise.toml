@@ -1,0 +1,5 @@
+[tasks.build]
+description = "Build the release version of the CLI"
+run = "cargo build --release"
+sources = ["src/**/*.rs", "Cargo.toml", "Cargo.lock"]
+outputs = ["target/release/xatan"]
