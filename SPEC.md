@@ -111,6 +111,10 @@ Implementations read configuration from a file named `.xatanrc` or `xatan.json` 
       "type": "string",
       "description": "The default parent branch to clone from when creating new branches",
       "default": "main"
+    },
+    "postCreate": {
+      "type": "string",
+      "description": "An optional hook command to run immediately after a database branch is created or synchronized"
     }
   },
   "required": ["org", "project", "database"]
@@ -134,13 +138,21 @@ All commands interacting with the Xata API (including `url`, `create`, `list`, `
    * `project` $\leftarrow$ `XATA_PROJECT_ID`
    * `database` $\leftarrow$ `XATA_DATABASE_NAME` (with fallback to `XATA_DATABASE`)
    * `fallbackParent` $\leftarrow$ `XATAN_FALLBACK_PARENT`
+   * `postCreate` $\leftarrow$ `XATAN_POST_CREATE`
 2. **Local Configuration File:**
    * Checks for `.xatanrc` or `xatan.json` in the current repository root/working directory or any parent directories.
    * If found, parses it as JSON.
    * Uses any values present in the file to resolve keys that have not already been supplied by environment variables.
 3. **Defaults:**
    * `fallbackParent` defaults to `main` if undefined by both environment variables and files.
+   * `fallbackParent` defaults to `main` if undefined by both environment variables and files.
 
+#### 4. Post-Creation Database Hook Discovery (Zero-Config)
+If `postCreate` is not explicitly configured via environment variables or a configuration file, `xatan` automatically performs zero-config hook discovery. It recursively looks for the repository root (containing `.git` or `.jj`) and checks for an executable or script inside the `.xata/` directory:
+* **Windows:** Looks for `post-create.bat`, `post-create.cmd`, `post-create.ps1`, `post-create.sh`, or `post-create`.
+* **Unix-like:** Looks for `post-create`, `post-create.sh`, or `post-create.bash`.
+
+If a matching file is found, it is automatically resolved and executed as the post-creation hook.
 #### 3. Validation Invariant
 If, after applying the resolution order above, any of the required properties (`org`, `project`, `database`) cannot be resolved (i.e., they are empty or undefined), the tool MUST print a descriptive error to `stderr` and exit with code `3` (Authentication / Config Missing).
 
@@ -190,8 +202,9 @@ ARGS:
               to the slugified name of the active Git branch.
 
 OPTIONS:
-    --create           Auto-create the branch in Xata if it does not exist
-    --parent <BRANCH>  The parent branch to clone from if creating [default: main]
+    --create              Auto-create the branch in Xata if it does not exist
+    --parent <BRANCH>     The parent branch to clone from if creating [default: main]
+    --skip-post-create    Skip executing the post-creation database hook
 ```
 
 * **Resolution Logic:**
@@ -203,8 +216,7 @@ OPTIONS:
   4. Query Xata API to see if `<prefix>-<suffix>` exists.
   5. **Branch Exists:** Retrieve its connection URL, write it to `stdout`, and exit `0`.
   6. **Branch is Missing:**
-     * If `--create` is set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, retrieve the connection URL, write it to `stdout`, and exit `0`.
-     * If `--create` is NOT set: Print a structured error to `stderr` and exit `2`.
+     * If `--create` is set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL, write it to `stdout`, and exit `0`.
 * **Exit Codes:**
   * `0`: Success (printed URL to stdout).
   * `1`: General Error (invalid configuration, missing network).
@@ -226,14 +238,16 @@ ARGS:
     <NAME>    The clean suffix of the branch to create
 
 OPTIONS:
-    --parent <BRANCH>  Parent branch to clone from [default: main]
+    --parent <BRANCH>     Parent branch to clone from [default: main]
+    --skip-post-create    Skip executing the post-creation database hook
 ```
 
 * **Behavior:**
   1. Determine developer prefix (e.g., `jane-doe`) and resolve target branch name: `<prefix>-<slugified-name>`.
   2. Check if the branch already exists. If it does, write a warning to `stderr` and exit `0` (or write error and exit `1` if strict behavior is desired).
   3. Call Xata API to create the branch with the specified parent.
-  4. Output the fully qualified branch name to `stdout` upon success.
+  4. Execute the post-creation hook (unless `--skip-post-create` is set).
+  5. Output the fully qualified branch name to `stdout` upon success.
 * **Exit Codes:**
   * `0`: Success.
   * `1`: Creation failed.
@@ -280,8 +294,9 @@ ARGS:
     [NAME]    The suffix of the branch to sync. Defaults to current Git branch counterpart.
 
 OPTIONS:
-    --from <BRANCH>    The parent branch to re-sync from [default: main]
-    -y, --yes          Bypass safety confirmation prompt
+    --from <BRANCH>       The parent branch to re-sync from [default: main]
+    -y, --yes             Bypass safety confirmation prompt
+    --skip-post-create    Skip executing the post-creation database hook
 ```
 
 * **Behavior:**
@@ -289,7 +304,8 @@ OPTIONS:
   2. Prompt for confirmation on `stderr` unless `-y`/`--yes` is supplied.
   3. Call Xata API to delete `<prefix>-<suffix>`.
   4. Call Xata API to create `<prefix>-<suffix>` with parent specified by `--from`.
-  5. Print success confirmation to `stderr`.
+  5. Execute the post-creation hook (unless `--skip-post-create` is set).
+  6. Print success confirmation to `stderr`.
 * **Exit Codes:**
   * `0`: Success.
   * `1`: Sync operation failed or was aborted.

@@ -29,7 +29,6 @@ enum Commands {
     /// Outputs the resolved developer identity
     Whoami,
 
-    /// Resolves and prints the connection URL for a database branch
     Url {
         /// The suffix of the target branch. Defaults to current Git branch counterpart.
         name: Option<String>,
@@ -41,9 +40,12 @@ enum Commands {
         /// The parent branch to clone from if creating
         #[arg(long)]
         parent: Option<String>,
+
+        /// Skip executing the post-creation database hook
+        #[arg(long)]
+        skip_post_create: bool,
     },
 
-    /// Creates a new isolated Xata branch prefixed with your identity
     Create {
         /// The clean suffix of the branch to create
         name: String,
@@ -51,6 +53,10 @@ enum Commands {
         /// Parent branch to clone from
         #[arg(long)]
         parent: Option<String>,
+
+        /// Skip executing the post-creation database hook
+        #[arg(long)]
+        skip_post_create: bool,
     },
 
     /// Lists project database branches, highlighting your own
@@ -64,7 +70,6 @@ enum Commands {
         all: bool,
     },
 
-    /// Re-clones or re-syncs schema/data from a parent branch
     Sync {
         /// The suffix of the branch to sync. Defaults to current Git branch counterpart.
         name: Option<String>,
@@ -76,6 +81,10 @@ enum Commands {
         /// Bypass safety confirmation prompt
         #[arg(short, long)]
         yes: bool,
+
+        /// Skip executing the post-creation database hook
+        #[arg(long)]
+        skip_post_create: bool,
     },
 
     /// Deletes a developer branch safely
@@ -165,6 +174,44 @@ fn find_repository_root() -> Option<PathBuf> {
     }
     std::env::current_dir().ok()
 }
+/// Searches for a post-create hook by convention inside the `.xata/` directory.
+/// Returns the absolute path of the found script or executable, if any exists.
+fn find_convention_hook_file() -> Option<String> {
+    let root = find_repository_root()?;
+    let xata_dir = root.join(".xata");
+    if !xata_dir.is_dir() {
+        return None;
+    }
+
+    let candidates = if cfg!(windows) {
+        vec![
+            "post-create.bat",
+            "post-create.cmd",
+            "post-create.ps1",
+            "post-create.sh",
+            "post-create",
+        ]
+    } else {
+        vec![
+            "post-create",
+            "post-create.sh",
+            "post-create.bash",
+        ]
+    };
+
+    for candidate in candidates {
+        let file_path = xata_dir.join(candidate);
+        if file_path.is_file() {
+            if let Ok(abs_path) = file_path.canonicalize() {
+                return Some(abs_path.to_string_lossy().into_owned());
+            } else {
+                return Some(file_path.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    None
+}
 
 /// Resolves full target branch name `<prefix>-<suffix>` using Smart Identity Resolution Algorithm
 fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
@@ -212,6 +259,7 @@ fn main() {
             name,
             create,
             parent,
+            skip_post_create,
         } => {
             let config = resolve_or_exit();
             let branch_name = match resolve_target_branch(name.as_deref()) {
@@ -264,6 +312,23 @@ fn main() {
                                         rewrite_connection_string(&conn_str, &config.database);
                                     // Save to cache
                                     cache::set_cached_url(&branch_name, &rewritten);
+
+                                    if !skip_post_create {
+                                        if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
+                                            eprintln!("Running post-creation hook: {}", command);
+                                            if let Err(e) = run_post_create_hook(
+                                                command,
+                                                &rewritten,
+                                                &branch_name,
+                                                parent_branch,
+                                                &config,
+                                            ) {
+                                                eprintln!("Error executing post-creation hook: {}", e);
+                                                std::process::exit(1);
+                                            }
+                                        }
+                                    }
+
                                     println!("{}", rewritten);
                                     std::process::exit(0);
                                 } else {
@@ -277,6 +342,23 @@ fn main() {
                                                 );
                                                 // Save to cache
                                                 cache::set_cached_url(&branch_name, &rewritten);
+
+                                                if !skip_post_create {
+                                                    if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
+                                                        eprintln!("Running post-creation hook: {}", command);
+                                                        if let Err(e) = run_post_create_hook(
+                                                            command,
+                                                            &rewritten,
+                                                            &branch_name,
+                                                            parent_branch,
+                                                            &config,
+                                                        ) {
+                                                            eprintln!("Error executing post-creation hook: {}", e);
+                                                            std::process::exit(1);
+                                                        }
+                                                    }
+                                                }
+
                                                 println!("{}", rewritten);
                                                 std::process::exit(0);
                                             } else {
@@ -315,7 +397,11 @@ fn main() {
                 }
             }
         }
-        Commands::Create { name, parent } => {
+        Commands::Create {
+            name,
+            parent,
+            skip_post_create,
+        } => {
             let config = resolve_or_exit();
             let branch_name = match resolve_target_branch(Some(&name)) {
                 Ok(b) => b,
@@ -343,8 +429,41 @@ fn main() {
                     ));
 
                     match client.create_branch(&branch_name, Some(&parent_id)) {
-                        Ok(_) => {
+                        Ok(created_branch) => {
                             spinner.stop("Branch created.");
+
+                            if !skip_post_create {
+                                if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
+                                    // Resolve connection string
+                                    let mut conn_url = created_branch.connection_string.clone();
+                                    if conn_url.is_none() {
+                                        // Fallback fetch
+                                        if let Ok(Some(fetched)) = client.get_branch(&branch_name) {
+                                            conn_url = fetched.connection_string;
+                                        }
+                                    }
+
+                                    if let Some(conn_str) = conn_url {
+                                        let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                                        eprintln!("Running post-creation hook: {}", command);
+                                        if let Err(e) = run_post_create_hook(
+                                            command,
+                                            &rewritten,
+                                            &branch_name,
+                                            parent_branch,
+                                            &config,
+                                        ) {
+                                            eprintln!("Error executing post-creation hook: {}", e);
+                                            std::process::exit(1);
+                                        }
+                                    } else {
+                                        if config.post_create.is_some() || find_convention_hook_file().is_some() {
+                                            eprintln!("Warning: Skipping post-creation hook because database connection URL could not be retrieved.");
+                                        }
+                                    }
+                                }
+                            }
+
                             println!("{}", branch_name);
                             std::process::exit(0);
                         }
@@ -457,7 +576,12 @@ fn main() {
                 }
             }
         }
-        Commands::Sync { name, from, yes } => {
+        Commands::Sync {
+            name,
+            from,
+            yes,
+            skip_post_create,
+        } => {
             let config = resolve_or_exit();
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
@@ -502,9 +626,38 @@ fn main() {
             match client.create_branch(&branch_name, Some(&from_parent_id)) {
                 Ok(created) => {
                     spinner.stop("Synchronization complete.");
-                    if let Some(conn_str) = created.connection_string {
+                    let mut conn_url = created.connection_string.clone();
+                    if conn_url.is_none() {
+                        if let Ok(Some(fetched)) = client.get_branch(&branch_name) {
+                            conn_url = fetched.connection_string;
+                        }
+                    }
+
+                    if let Some(conn_str) = conn_url {
                         let rewritten = rewrite_connection_string(&conn_str, &config.database);
                         cache::set_cached_url(&branch_name, &rewritten);
+
+                        if !skip_post_create {
+                            if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
+                                eprintln!("Running post-creation hook: {}", command);
+                                if let Err(e) = run_post_create_hook(
+                                    command,
+                                    &rewritten,
+                                    &branch_name,
+                                    from_parent,
+                                    &config,
+                                ) {
+                                    eprintln!("Error executing post-creation hook: {}", e);
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                    } else {
+                        if !skip_post_create {
+                            if config.post_create.is_some() || find_convention_hook_file().is_some() {
+                                                eprintln!("Warning: Skipping post-creation hook because database connection URL could not be retrieved.");
+                            }
+                        }
                     }
                     std::process::exit(0);
                 }
@@ -641,6 +794,7 @@ fn run_init() -> Result<(), String> {
         project: Some(project.trim().to_string()),
         database: Some(database.trim().to_string()),
         fallback_parent: Some("main".to_string()),
+        post_create: None,
     };
 
     let config_json = serde_json::to_string_pretty(&payload)
@@ -690,6 +844,71 @@ fn rewrite_connection_string(conn_str: &str, db_name: &str) -> String {
     }
     conn_str.to_string()
 }
+/// Executes the post-creation hook subprocess in a platform-appropriate shell.
+/// Ensures standard output of the child is forwarded to standard error of the parent
+/// to avoid standard output pollution, while standard error is inherited directly.
+fn run_post_create_hook(
+    command_str: &str,
+    connection_url: &str,
+    branch_name: &str,
+    parent_branch: &str,
+    config: &config::ResolvedConfig,
+) -> Result<(), String> {
+    let mut cmd = if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd.exe");
+        c.arg("/C").arg(command_str);
+        c
+    } else {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(command_str);
+        c
+    };
+
+    cmd.env("DATABASE_URL", connection_url)
+        .env("XATA_DATABASE_URL", connection_url)
+        .env("XATAN_BRANCH_NAME", branch_name)
+        .env("XATAN_PARENT_BRANCH", parent_branch)
+        .env("XATA_ORG_ID", &config.org)
+        .env("XATA_PROJECT_ID", &config.project)
+        .env("XATA_DATABASE_NAME", &config.database);
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::inherit());
+
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn hook: {}", e))?;
+
+    // Forward child's stdout to stderr of the parent
+    let stdout_thread = if let Some(stdout) = child.stdout.take() {
+        Some(std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let mut reader = BufReader::new(stdout);
+            let mut line = Vec::new();
+            while let Ok(n) = reader.read_until(b'\n', &mut line) {
+                if n == 0 {
+                    break;
+                }
+                let mut err = std::io::stderr();
+                let _ = err.write_all(&line);
+                let _ = err.flush();
+                line.clear();
+            }
+        }))
+    } else {
+        None
+    };
+
+    let status = child.wait().map_err(|e| format!("Failed to wait for hook: {}", e))?;
+    if let Some(t) = stdout_thread {
+        let _ = t.join();
+    }
+
+    if !status.success() {
+        let code = status.code().unwrap_or(1);
+        return Err(format!("Hook exited with non-zero status code: {}", code));
+    }
+
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
@@ -708,5 +927,57 @@ mod tests {
         // 2. Passing already prefixed string
         let res2 = resolve_target_branch(Some("me-fiws-net-nkotxwxwpswz")).unwrap();
         assert_eq!(res2, "me-fiws-net-nkotxwxwpswz");
+    }
+
+    #[test]
+    fn test_run_post_create_hook_success() {
+        let command = if cfg!(windows) {
+            "echo [HOOK_TEST_OK] %DATABASE_URL%"
+        } else {
+            "echo [HOOK_TEST_OK] $DATABASE_URL"
+        };
+        let config = config::ResolvedConfig {
+            org: "test-org".to_string(),
+            project: "test-proj".to_string(),
+            database: "test-db".to_string(),
+            fallback_parent: "main".to_string(),
+            api_key: "test-key".to_string(),
+            post_create: None,
+        };
+        let res = run_post_create_hook(
+            command,
+            "postgresql://user:pass@localhost:5432/mydb",
+            "test-branch",
+            "main",
+            &config,
+        );
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_run_post_create_hook_failure() {
+        let command = if cfg!(windows) {
+            "exit 42"
+        } else {
+            "exit 42"
+        };
+        let config = config::ResolvedConfig {
+            org: "test-org".to_string(),
+            project: "test-proj".to_string(),
+            database: "test-db".to_string(),
+            fallback_parent: "main".to_string(),
+            api_key: "test-key".to_string(),
+            post_create: None,
+        };
+        let res = run_post_create_hook(
+            command,
+            "postgresql://user:pass@localhost:5432/mydb",
+            "test-branch",
+            "main",
+            &config,
+        );
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("42"));
     }
 }

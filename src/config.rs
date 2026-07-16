@@ -8,6 +8,7 @@ pub struct XatanConfig {
     pub project: Option<String>,
     pub database: Option<String>,
     pub fallback_parent: Option<String>,
+    pub post_create: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,6 +18,7 @@ pub struct ResolvedConfig {
     pub database: String,
     pub fallback_parent: String,
     pub api_key: String,
+    pub post_create: Option<String>,
 }
 
 /// Recursively searches for `.xatanrc` or `xatan.json` starting from `start_dir` and going up.
@@ -65,6 +67,7 @@ where
     let file_project = config_file.as_ref().and_then(|c| c.project.clone());
     let file_database = config_file.as_ref().and_then(|c| c.database.clone());
     let file_fallback_parent = config_file.as_ref().and_then(|c| c.fallback_parent.clone());
+    let file_post_create = config_file.as_ref().and_then(|c| c.post_create.clone());
 
     let (def_org, def_project, def_database) = defaults;
 
@@ -93,12 +96,17 @@ where
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
 
+    let post_create = get_env("XATAN_POST_CREATE")
+        .or(file_post_create)
+        .filter(|s| !s.trim().is_empty());
+
     Ok(ResolvedConfig {
         org: org.trim().to_string(),
         project: project.trim().to_string(),
         database: database.trim().to_string(),
         fallback_parent: fallback_parent.trim().to_string(),
         api_key: api_key.trim().to_string(),
+        post_create,
     })
 }
 
@@ -225,6 +233,7 @@ mod tests {
                 database: "my-db".to_string(),
                 fallback_parent: "my-parent".to_string(),
                 api_key: "my-api-key".to_string(),
+                post_create: None,
             }
         );
     }
@@ -243,6 +252,7 @@ mod tests {
             project: Some("file-project".to_string()),
             database: Some("file-db".to_string()),
             fallback_parent: Some("file-parent".to_string()),
+            post_create: None,
         };
 
         let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
@@ -254,6 +264,7 @@ mod tests {
                 database: "file-db".to_string(),
                 fallback_parent: "file-parent".to_string(),
                 api_key: "my-api-key".to_string(),
+                post_create: None,
             }
         );
     }
@@ -277,6 +288,7 @@ mod tests {
             project: Some("file-project".to_string()),
             database: Some("file-db".to_string()),
             fallback_parent: Some("file-parent".to_string()),
+            post_create: None,
         };
 
         let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
@@ -288,6 +300,7 @@ mod tests {
                 database: "env-db".to_string(),
                 fallback_parent: "file-parent".to_string(),
                 api_key: "my-api-key".to_string(),
+                post_create: None,
             }
         );
     }
@@ -407,7 +420,72 @@ mod tests {
                 database: "def-db".to_string(),
                 fallback_parent: "main".to_string(),
                 api_key: "my-api-key".to_string(),
+                post_create: None,
             }
         );
+    }
+
+    #[test]
+    fn test_resolve_config_post_create_env() {
+        let envs = [
+            ("XATA_API_KEY", "my-api-key"),
+            ("XATA_ORG_ID", "my-org"),
+            ("XATA_PROJECT_ID", "my-project"),
+            ("XATA_DATABASE_NAME", "my-db"),
+            ("XATAN_POST_CREATE", "sh ./test_hook.sh"),
+        ];
+        let get_env = |key: &str| {
+            envs.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+
+        let resolved = resolve_config_impl(get_env, None, (None, None, None)).unwrap();
+        assert_eq!(resolved.post_create, Some("sh ./test_hook.sh".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_config_post_create_file() {
+        let envs = [("XATA_API_KEY", "my-api-key")];
+        let get_env = |key: &str| {
+            envs.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+
+        let file_config = XatanConfig {
+            org: Some("file-org".to_string()),
+            project: Some("file-project".to_string()),
+            database: Some("file-db".to_string()),
+            fallback_parent: None,
+            post_create: Some("sh ./file_hook.sh".to_string()),
+        };
+
+        let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
+        assert_eq!(resolved.post_create, Some("sh ./file_hook.sh".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_config_post_create_priority() {
+        let envs = [
+            ("XATA_API_KEY", "my-api-key"),
+            ("XATAN_POST_CREATE", "sh ./env_hook.sh"),
+        ];
+        let get_env = |key: &str| {
+            envs.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+
+        let file_config = XatanConfig {
+            org: Some("file-org".to_string()),
+            project: Some("file-project".to_string()),
+            database: Some("file-db".to_string()),
+            fallback_parent: None,
+            post_create: Some("sh ./file_hook.sh".to_string()),
+        };
+
+        let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
+        assert_eq!(resolved.post_create, Some("sh ./env_hook.sh".to_string()));
     }
 }

@@ -234,6 +234,7 @@ mod tests {
             database: "test-db".to_string(),
             fallback_parent: "main".to_string(),
             api_key: "test-key".to_string(),
+            post_create: None,
         }
     }
 

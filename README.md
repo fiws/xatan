@@ -51,6 +51,64 @@ XATA_DATABASE_NAME="your-db"
 
 ---
 
+## Post-Creation Database Hooks
+
+`xatan` supports executing automated post-creation database modification scripts (e.g., seeding, migrations, or database initialization) immediately after a new database branch is dynamically created (via `url --create` or `create`) or synchronized (via `sync`).
+
+### 1. Explicit Configuration
+
+Configure your post-creation script command directly in your local `.xatanrc` configuration file:
+
+```json
+{
+  "org": "your-org",
+  "project": "your-project",
+  "database": "your-db",
+  "postCreate": "npm run db:seed"
+}
+```
+
+Or dynamically via the `XATAN_POST_CREATE` environment variable:
+
+```bash
+export XATAN_POST_CREATE="python run_migrations.py && python seed_admin.py"
+```
+
+### 2. Zero-Config Convention-Based Hooks
+
+If no explicit hook is configured, `xatan` will automatically look for and run an executable or script located in the `.xata/` directory at the root of your repository (e.g., `.xata/post-create`).
+
+Supported convention file names:
+* **Unix-like (macOS/Linux):** `.xata/post-create`, `.xata/post-create.sh`, or `.xata/post-create.bash` (Ensure the file is executable: `chmod +x .xata/post-create`)
+* **Windows:** `.xata/post-create.bat`, `.xata/post-create.cmd`, `.xata/post-create.ps1`, `.xata/post-create.sh`, or `.xata/post-create`
+
+### 3. Injected Environment Variables
+
+The post-creation script subprocess runs with the following automatically injected environment variables, allowing your seeders/migration tools to connect to the newly created branch instantly:
+
+* `DATABASE_URL` / `XATA_DATABASE_URL`: The fully qualified and rewritten connection string for the new isolated branch.
+* `XATAN_BRANCH_NAME`: The resolved name of the new branch (e.g., `jane-doe-feature-login`).
+* `XATAN_PARENT_BRANCH`: The parent branch that this new branch was cloned from (e.g., `main`).
+* `XATA_ORG_ID`: The resolved Xata organization ID.
+* `XATA_PROJECT_ID`: The resolved Xata project ID.
+* `XATA_DATABASE_NAME`: The resolved default database name.
+
+### 4. Direct Stream Separation & Piping
+
+The stdout of the hook subprocess is automatically captured and redirected to standard error (`stderr`) of the `xatan` parent process. This guarantees that your hook's console output is safely visible in your terminal, while strictly preserving clean `stdout` separation so dynamic evaluation chains like `DATABASE_URL=$(xatan url --create)` work without pollution.
+
+### 5. Bypassing the Hook
+
+To temporarily bypass the post-creation hook for a specific command run, pass the `--skip-post-create` flag:
+
+```bash
+xatan url --create --skip-post-create
+xatan create feature-branch --skip-post-create
+xatan sync --skip-post-create
+```
+
+---
+
 ## Integration with mise
 
 [mise](https://mise.jdx.dev) is a fast environment and tool manager. You can integrate `xatan` into your `mise.toml` to automate your local development database environment.
