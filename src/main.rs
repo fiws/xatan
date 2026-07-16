@@ -553,7 +553,11 @@ fn main() {
                 let is_mine = b.name.starts_with(&prefix);
                 let is_active = Some(&b.name) == active_branch.as_ref();
                 let parent_str = b.parent_id.as_deref().unwrap_or("-").to_string();
-                let created_str = b.created_at.as_deref().map(|s| humanize_time_ago(s)).unwrap_or_else(|| "-".to_string());
+                let created_str = b
+                    .created_at
+                    .as_deref()
+                    .map(|s| humanize_time_ago(s))
+                    .unwrap_or_else(|| "-".to_string());
 
                 max_name_len = max_name_len.max(b.name.len());
                 max_parent_len = max_parent_len.max(parent_str.len());
@@ -1059,7 +1063,6 @@ mod tests {
         // Invalid format fallback
         assert_eq!(humanize_time_ago("invalid"), "invalid");
     }
-
 
     #[test]
     fn test_resolve_target_branch_already_prefixed() {
