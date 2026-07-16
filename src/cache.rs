@@ -1,6 +1,6 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct XatanCache {
@@ -43,7 +43,9 @@ pub fn get_cached_url(branch_name: &str) -> Option<String> {
 
 pub fn set_cached_url(branch_name: &str, url: &str) {
     let mut cache = load_cache();
-    cache.branches.insert(branch_name.to_string(), url.to_string());
+    cache
+        .branches
+        .insert(branch_name.to_string(), url.to_string());
     save_cache(&cache);
 }
 

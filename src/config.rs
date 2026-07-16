@@ -104,9 +104,9 @@ where
 
 /// Resolves the configuration dynamically from environment variables and local `.xatanrc` or `xatan.json`.
 pub fn resolve_config() -> Result<ResolvedConfig, String> {
-    let current_dir = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
-    
+    let current_dir =
+        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+
     let config_file = if let Some(path) = find_config_file(&current_dir) {
         Some(load_config_file(&path)?)
     } else {
@@ -120,7 +120,9 @@ pub fn resolve_config() -> Result<ResolvedConfig, String> {
 
 /// Internal helper to parse database URL from .xata/config.json or .xatarc
 pub fn parse_database_url(url: &str) -> (Option<String>, Option<String>, Option<String>) {
-    let without_scheme = url.trim_start_matches("https://").trim_start_matches("http://");
+    let without_scheme = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
     let mut parts = without_scheme.split('/');
     let host = parts.next().unwrap_or("");
 
@@ -170,7 +172,8 @@ pub fn get_xata_defaults() -> (Option<String>, Option<String>, Option<String>) {
         for f in files {
             if let Ok(content) = std::fs::read_to_string(f) {
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let db_url = val.get("databaseURL")
+                    let db_url = val
+                        .get("databaseURL")
                         .or_else(|| val.get("databaseUrl"))
                         .and_then(|v| v.as_str());
 
@@ -408,4 +411,3 @@ mod tests {
         );
     }
 }
-

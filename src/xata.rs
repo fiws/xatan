@@ -71,7 +71,10 @@ impl XataClient {
     pub fn get_branch(&self, branch_name: &str) -> Result<Option<XataBranch>, String> {
         let mut target_id = branch_name.to_string();
         if let Ok(branches) = self.list_branches() {
-            if let Some(b) = branches.iter().find(|b| b.name == branch_name || b.id == branch_name) {
+            if let Some(b) = branches
+                .iter()
+                .find(|b| b.name == branch_name || b.id == branch_name)
+            {
                 target_id = b.id.clone();
             } else {
                 return Ok(None);
@@ -83,14 +86,16 @@ impl XataClient {
             self.base_url, self.org, self.project, target_id
         );
 
-        let response = match self.client()
+        let response = match self
+            .client()
             .get(&url)
             .set("Authorization", &format!("Bearer {}", self.api_key))
-            .call() {
-                Ok(resp) => resp,
-                Err(ureq::Error::Status(_code, resp)) => resp,
-                Err(err) => return Err(format!("HTTP request failed: {}", err)),
-            };
+            .call()
+        {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(_code, resp)) => resp,
+            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+        };
 
         if response.status() == 404 {
             return Ok(None);
@@ -100,14 +105,19 @@ impl XataClient {
             return Err(self.handle_error_response(response));
         }
 
-        let branch: XataBranch = response.into_json()
+        let branch: XataBranch = response
+            .into_json()
             .map_err(|e| format!("Failed to parse branch details response: {}", e))?;
 
         Ok(Some(branch))
     }
 
     /// Creates a new branch, optionally inheriting from a parent branch.
-    pub fn create_branch(&self, branch_name: &str, parent_branch: Option<&str>) -> Result<XataBranch, String> {
+    pub fn create_branch(
+        &self,
+        branch_name: &str,
+        parent_branch: Option<&str>,
+    ) -> Result<XataBranch, String> {
         let url = format!(
             "{}/organizations/{}/projects/{}/branches",
             self.base_url, self.org, self.project
@@ -119,20 +129,23 @@ impl XataClient {
             parent_id: parent_branch.map(|s| s.to_string()),
         };
 
-        let response = match self.client()
+        let response = match self
+            .client()
             .post(&url)
             .set("Authorization", &format!("Bearer {}", self.api_key))
-            .send_json(&payload) {
-                Ok(resp) => resp,
-                Err(ureq::Error::Status(_code, resp)) => resp,
-                Err(err) => return Err(format!("HTTP request failed: {}", err)),
-            };
+            .send_json(&payload)
+        {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(_code, resp)) => resp,
+            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+        };
 
         if response.status() < 200 || response.status() >= 300 {
             return Err(self.handle_error_response(response));
         }
 
-        let branch: XataBranch = response.into_json()
+        let branch: XataBranch = response
+            .into_json()
             .map_err(|e| format!("Failed to parse create branch response: {}", e))?;
 
         Ok(branch)
@@ -142,7 +155,10 @@ impl XataClient {
     pub fn delete_branch(&self, branch_name: &str) -> Result<(), String> {
         let mut target_id = branch_name.to_string();
         if let Ok(branches) = self.list_branches() {
-            if let Some(b) = branches.iter().find(|b| b.name == branch_name || b.id == branch_name) {
+            if let Some(b) = branches
+                .iter()
+                .find(|b| b.name == branch_name || b.id == branch_name)
+            {
                 target_id = b.id.clone();
             } else {
                 return Ok(());
@@ -154,14 +170,16 @@ impl XataClient {
             self.base_url, self.org, self.project, target_id
         );
 
-        let response = match self.client()
+        let response = match self
+            .client()
             .delete(&url)
             .set("Authorization", &format!("Bearer {}", self.api_key))
-            .call() {
-                Ok(resp) => resp,
-                Err(ureq::Error::Status(_code, resp)) => resp,
-                Err(err) => return Err(format!("HTTP request failed: {}", err)),
-            };
+            .call()
+        {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(_code, resp)) => resp,
+            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+        };
 
         if response.status() == 404 {
             return Ok(());
@@ -181,20 +199,23 @@ impl XataClient {
             self.base_url, self.org, self.project
         );
 
-        let response = match self.client()
+        let response = match self
+            .client()
             .get(&url)
             .set("Authorization", &format!("Bearer {}", self.api_key))
-            .call() {
-                Ok(resp) => resp,
-                Err(ureq::Error::Status(_code, resp)) => resp,
-                Err(err) => return Err(format!("HTTP request failed: {}", err)),
-            };
+            .call()
+        {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(_code, resp)) => resp,
+            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+        };
 
         if response.status() < 200 || response.status() >= 300 {
             return Err(self.handle_error_response(response));
         }
 
-        let res: XataBranchesResponse = response.into_json()
+        let res: XataBranchesResponse = response
+            .into_json()
             .map_err(|e| format!("Failed to parse list branches response: {}", e))?;
 
         Ok(res.branches)
@@ -219,17 +240,23 @@ mod tests {
     #[test]
     fn test_get_branch_success() {
         let mut server = Server::new();
-        let mock = server.mock("GET", "/organizations/test-org/projects/test-proj/branches/my-branch")
+        let mock = server
+            .mock(
+                "GET",
+                "/organizations/test-org/projects/test-proj/branches/my-branch",
+            )
             .match_header("Authorization", "Bearer test-key")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{
+            .with_body(
+                r#"{
                 "id": "my-branch",
                 "name": "my-branch",
                 "createdAt": "2023-11-07T05:31:56Z",
                 "parentID": "main",
                 "connectionString": "postgresql://test"
-            }"#)
+            }"#,
+            )
             .create();
 
         let client = XataClient::new(&test_config()).with_base_url(server.url());
@@ -251,7 +278,11 @@ mod tests {
     #[test]
     fn test_get_branch_not_found() {
         let mut server = Server::new();
-        let mock = server.mock("GET", "/organizations/test-org/projects/test-proj/branches/missing-branch")
+        let mock = server
+            .mock(
+                "GET",
+                "/organizations/test-org/projects/test-proj/branches/missing-branch",
+            )
             .with_status(404)
             .create();
 
@@ -265,16 +296,24 @@ mod tests {
     #[test]
     fn test_create_branch_success() {
         let mut server = Server::new();
-        let mock = server.mock("POST", "/organizations/test-org/projects/test-proj/branches")
+        let mock = server
+            .mock(
+                "POST",
+                "/organizations/test-org/projects/test-proj/branches",
+            )
             .match_header("Authorization", "Bearer test-key")
-            .match_body(mockito::Matcher::JsonString(r#"{"mode":"inherit","name":"new-branch","parentID":"main"}"#.to_string()))
+            .match_body(mockito::Matcher::JsonString(
+                r#"{"mode":"inherit","name":"new-branch","parentID":"main"}"#.to_string(),
+            ))
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(r#"{
+            .with_body(
+                r#"{
                 "id": "new-branch",
                 "name": "new-branch",
                 "parentID": "main"
-            }"#)
+            }"#,
+            )
             .create();
 
         let client = XataClient::new(&test_config()).with_base_url(server.url());

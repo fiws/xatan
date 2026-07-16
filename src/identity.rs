@@ -142,7 +142,10 @@ mod tests {
 
     #[test]
     fn test_slugify() {
-        assert_eq!(slugify("Alice.Smith@company.com"), "alice-smith-company-com");
+        assert_eq!(
+            slugify("Alice.Smith@company.com"),
+            "alice-smith-company-com"
+        );
         assert_eq!(slugify("Dev+Sandbox@org.net"), "dev-sandbox-org-net");
         assert_eq!(slugify("Jane Doe"), "jane-doe");
         assert_eq!(slugify("admin_local"), "admin-local");
@@ -260,8 +263,6 @@ mod tests {
         assert!(res.starts_with("jane-doe-"));
         assert_eq!(res.len(), "jane-doe-".len() + 8); // 8 hex digits FNV-1a hash
     }
-
-
 
     #[test]
     fn test_resolve_identity_failed() {

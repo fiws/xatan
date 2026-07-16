@@ -4,12 +4,11 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod cache;
 mod config;
 mod identity;
 mod prompt;
 mod xata;
-mod cache;
-
 
 #[derive(Parser, Debug)]
 #[command(
@@ -99,19 +98,42 @@ enum Commands {
 /// Query current active local Jujutsu bookmark/revision or Git branch
 fn get_current_vcs_branch_or_bookmark() -> Option<String> {
     // 1. Try Jujutsu (jj) first
-    let jj_output = Command::new("jj")
+    // First, check if there are any local bookmarks on `@`
+    let jj_bookmark = Command::new("jj")
         .args([
             "log",
             "-r",
             "@",
             "-T",
-            "coalesce(local_bookmarks, change_id.short(12))",
+            "local_bookmarks",
             "--no-graph",
             "--color=never",
         ])
         .output();
 
-    if let Ok(output) = jj_output {
+    if let Ok(output) = jj_bookmark {
+        if output.status.success() {
+            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !s.is_empty() {
+                return Some(s);
+            }
+        }
+    }
+
+    // Otherwise, find the "branch" (the root/sprout of the branch) and use its change_id
+    let jj_branch = Command::new("jj")
+        .args([
+            "log",
+            "-r",
+            "roots(trunk()..@)",
+            "-T",
+            "change_id.short(12)",
+            "--no-graph",
+            "--color=never",
+        ])
+        .output();
+
+    if let Ok(output) = jj_branch {
         if output.status.success() {
             let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !s.is_empty() {
@@ -159,7 +181,11 @@ fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
         return Err("Resolved target branch suffix is empty".to_string());
     }
 
-    Ok(format!("{}-{}", prefix, suffix))
+    if suffix == prefix || suffix.starts_with(&format!("{}-", prefix)) {
+        Ok(suffix)
+    } else {
+        Ok(format!("{}-{}", prefix, suffix))
+    }
 }
 
 fn main() {
@@ -172,19 +198,21 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Whoami => {
-            match identity::resolve_identity() {
-                Ok(prefix) => {
-                    println!("{}", prefix);
-                    std::process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
+        Commands::Whoami => match identity::resolve_identity() {
+            Ok(prefix) => {
+                println!("{}", prefix);
+                std::process::exit(0);
             }
-        }
-        Commands::Url { name, create, parent } => {
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        },
+        Commands::Url {
+            name,
+            create,
+            parent,
+        } => {
             let config = resolve_or_exit();
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
@@ -210,7 +238,10 @@ fn main() {
                         println!("{}", rewritten);
                         std::process::exit(0);
                     } else {
-                        eprintln!("Error: Branch '{}' exists but has no connection URL.", branch_name);
+                        eprintln!(
+                            "Error: Branch '{}' exists but has no connection URL.",
+                            branch_name
+                        );
                         std::process::exit(1);
                     }
                 }
@@ -220,13 +251,17 @@ fn main() {
                         let parent_id = resolve_parent_id(&client, parent_branch);
                         let _ = prompt::intro("xatan url");
                         let spinner = prompt::spinner();
-                        spinner.start(format!("Creating branch '{}' from '{}'...", branch_name, parent_branch));
+                        spinner.start(format!(
+                            "Creating branch '{}' from '{}'...",
+                            branch_name, parent_branch
+                        ));
 
                         match client.create_branch(&branch_name, Some(&parent_id)) {
                             Ok(created_branch) => {
                                 spinner.stop("Branch created.");
                                 if let Some(conn_str) = created_branch.connection_string {
-                                    let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                                    let rewritten =
+                                        rewrite_connection_string(&conn_str, &config.database);
                                     // Save to cache
                                     cache::set_cached_url(&branch_name, &rewritten);
                                     println!("{}", rewritten);
@@ -236,18 +271,25 @@ fn main() {
                                     match client.get_branch(&branch_name) {
                                         Ok(Some(re_fetched)) => {
                                             if let Some(conn_str) = re_fetched.connection_string {
-                                                let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                                                let rewritten = rewrite_connection_string(
+                                                    &conn_str,
+                                                    &config.database,
+                                                );
                                                 // Save to cache
                                                 cache::set_cached_url(&branch_name, &rewritten);
                                                 println!("{}", rewritten);
                                                 std::process::exit(0);
                                             } else {
-                                                eprintln!("Error: Branch created, but connection URL is not available.");
+                                                eprintln!(
+                                                    "Error: Branch created, but connection URL is not available."
+                                                );
                                                 std::process::exit(1);
                                             }
                                         }
                                         _ => {
-                                            eprintln!("Error: Created branch but failed to retrieve credentials.");
+                                            eprintln!(
+                                                "Error: Created branch but failed to retrieve credentials."
+                                            );
                                             std::process::exit(1);
                                         }
                                     }
@@ -260,7 +302,10 @@ fn main() {
                             }
                         }
                     } else {
-                        eprintln!("Error: Branch '{}' does not exist. Use --create to create it dynamically.", branch_name);
+                        eprintln!(
+                            "Error: Branch '{}' does not exist. Use --create to create it dynamically.",
+                            branch_name
+                        );
                         std::process::exit(2);
                     }
                 }
@@ -292,7 +337,10 @@ fn main() {
                     let parent_id = resolve_parent_id(&client, parent_branch);
                     let _ = prompt::intro("xatan create");
                     let spinner = prompt::spinner();
-                    spinner.start(format!("Creating branch '{}' from '{}'...", branch_name, parent_branch));
+                    spinner.start(format!(
+                        "Creating branch '{}' from '{}'...",
+                        branch_name, parent_branch
+                    ));
 
                     match client.create_branch(&branch_name, Some(&parent_id)) {
                         Ok(_) => {
@@ -366,7 +414,9 @@ fn main() {
 
             let header = format!(
                 "    {:width_name$} | {:width_parent$} | {:width_created$}",
-                "Branch Name", "Parent", "Created At",
+                "Branch Name",
+                "Parent",
+                "Created At",
                 width_name = max_name_len,
                 width_parent = max_parent_len,
                 width_created = max_created_len
@@ -391,7 +441,10 @@ fn main() {
 
                 let row = format!(
                     "{} {:width_name$} | {:width_parent$} | {:width_created$}",
-                    indicator, b.name, parent_str, created_str,
+                    indicator,
+                    b.name,
+                    parent_str,
+                    created_str,
                     width_name = max_name_len,
                     width_parent = max_parent_len,
                     width_created = max_created_len
@@ -474,7 +527,10 @@ fn main() {
 
             if !yes {
                 let _ = prompt::intro("xatan delete");
-                let msg = format!("Are you sure you want to permanently delete branch '{}'?", branch_name);
+                let msg = format!(
+                    "Are you sure you want to permanently delete branch '{}'?",
+                    branch_name
+                );
                 match prompt::prompt_confirm(&msg, false) {
                     Ok(true) => {}
                     _ => {
@@ -513,9 +569,7 @@ fn main() {
 
             // Check cache first for sub-millisecond psql startup
             if let Some(cached_url) = cache::get_cached_url(&branch_name) {
-                let err = Command::new("psql")
-                    .arg(cached_url)
-                    .exec();
+                let err = Command::new("psql").arg(cached_url).exec();
                 eprintln!("Failed to execute psql: {}", err);
                 std::process::exit(1);
             }
@@ -527,13 +581,14 @@ fn main() {
                         let rewritten = rewrite_connection_string(&conn_str, &config.database);
                         // Save to cache
                         cache::set_cached_url(&branch_name, &rewritten);
-                        let err = Command::new("psql")
-                            .arg(rewritten)
-                            .exec();
+                        let err = Command::new("psql").arg(rewritten).exec();
                         eprintln!("Failed to execute psql: {}", err);
                         std::process::exit(1);
                     } else {
-                        eprintln!("Error: Branch '{}' exists but has no connection URL.", branch_name);
+                        eprintln!(
+                            "Error: Branch '{}' exists but has no connection URL.",
+                            branch_name
+                        );
                         std::process::exit(1);
                     }
                 }
@@ -572,10 +627,13 @@ fn run_init() -> Result<(), String> {
     let database = prompt::prompt_text("Database Name", defaults.2.as_deref())?;
 
     if org.trim().is_empty() || project.trim().is_empty() || database.trim().is_empty() {
-        return Err("Organization ID, Project ID, and Database Name are all required fields.".to_string());
+        return Err(
+            "Organization ID, Project ID, and Database Name are all required fields.".to_string(),
+        );
     }
 
-    let root = find_repository_root().ok_or_else(|| "Failed to resolve repository root".to_string())?;
+    let root =
+        find_repository_root().ok_or_else(|| "Failed to resolve repository root".to_string())?;
     let config_path = root.join(".xatanrc");
 
     let payload = config::XatanConfig {
@@ -588,8 +646,13 @@ fn run_init() -> Result<(), String> {
     let config_json = serde_json::to_string_pretty(&payload)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-    std::fs::write(&config_path, config_json)
-        .map_err(|e| format!("Failed to write configuration file {}: {}", config_path.display(), e))?;
+    std::fs::write(&config_path, config_json).map_err(|e| {
+        format!(
+            "Failed to write configuration file {}: {}",
+            config_path.display(),
+            e
+        )
+    })?;
 
     prompt::outro("Successfully initialized .xatanrc!").map_err(|e| e.to_string())?;
 
@@ -599,7 +662,10 @@ fn run_init() -> Result<(), String> {
 /// Resolves parent branch name (e.g. "main") to its unique branch ID
 fn resolve_parent_id(client: &xata::XataClient, parent_name: &str) -> String {
     if let Ok(branches) = client.list_branches() {
-        if let Some(b) = branches.iter().find(|b| b.name == parent_name || b.id == parent_name) {
+        if let Some(b) = branches
+            .iter()
+            .find(|b| b.name == parent_name || b.id == parent_name)
+        {
             return b.id.clone();
         }
     }
@@ -612,7 +678,8 @@ fn rewrite_connection_string(conn_str: &str, db_name: &str) -> String {
         let rest = &conn_str[scheme_idx + 3..];
         if let Some(slash_idx) = rest.find('/') {
             let path_and_query = &rest[slash_idx + 1..];
-            let end_idx = path_and_query.find('?')
+            let end_idx = path_and_query
+                .find('?')
                 .or_else(|| path_and_query.find('#'))
                 .unwrap_or(path_and_query.len());
             let query_part = &path_and_query[end_idx..];
@@ -622,4 +689,24 @@ fn rewrite_connection_string(conn_str: &str, db_name: &str) -> String {
         }
     }
     conn_str.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_target_branch_already_prefixed() {
+        unsafe {
+            std::env::set_var("XATAN_PREFIX", "me-fiws-net");
+        }
+
+        // 1. Passing just suffix
+        let res1 = resolve_target_branch(Some("nkotxwxwpswz")).unwrap();
+        assert_eq!(res1, "me-fiws-net-nkotxwxwpswz");
+
+        // 2. Passing already prefixed string
+        let res2 = resolve_target_branch(Some("me-fiws-net-nkotxwxwpswz")).unwrap();
+        assert_eq!(res2, "me-fiws-net-nkotxwxwpswz");
+    }
 }
