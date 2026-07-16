@@ -190,11 +190,7 @@ fn find_convention_hook_file() -> Option<String> {
             "post-create",
         ]
     } else {
-        vec![
-            "post-create",
-            "post-create.sh",
-            "post-create.bash",
-        ]
+        vec!["post-create", "post-create.sh", "post-create.bash"]
     };
 
     for candidate in candidates {
@@ -312,7 +308,11 @@ fn main() {
                                     cache::set_cached_url(&branch_name, &rewritten);
 
                                     if !skip_post_create {
-                                        if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
+                                        if let Some(ref command) = config
+                                            .post_create
+                                            .clone()
+                                            .or_else(find_convention_hook_file)
+                                        {
                                             eprintln!("Running post-creation hook: {}", command);
                                             if let Err(e) = run_post_create_hook(
                                                 command,
@@ -321,7 +321,10 @@ fn main() {
                                                 parent_branch,
                                                 &config,
                                             ) {
-                                                eprintln!("Error executing post-creation hook: {}", e);
+                                                eprintln!(
+                                                    "Error executing post-creation hook: {}",
+                                                    e
+                                                );
                                                 std::process::exit(1);
                                             }
                                         }
@@ -342,8 +345,15 @@ fn main() {
                                                 cache::set_cached_url(&branch_name, &rewritten);
 
                                                 if !skip_post_create {
-                                                    if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
-                                                        eprintln!("Running post-creation hook: {}", command);
+                                                    if let Some(ref command) = config
+                                                        .post_create
+                                                        .clone()
+                                                        .or_else(find_convention_hook_file)
+                                                    {
+                                                        eprintln!(
+                                                            "Running post-creation hook: {}",
+                                                            command
+                                                        );
                                                         if let Err(e) = run_post_create_hook(
                                                             command,
                                                             &rewritten,
@@ -351,7 +361,10 @@ fn main() {
                                                             parent_branch,
                                                             &config,
                                                         ) {
-                                                            eprintln!("Error executing post-creation hook: {}", e);
+                                                            eprintln!(
+                                                                "Error executing post-creation hook: {}",
+                                                                e
+                                                            );
                                                             std::process::exit(1);
                                                         }
                                                     }
@@ -431,7 +444,11 @@ fn main() {
                             spinner.stop("Branch created.");
 
                             if !skip_post_create {
-                                if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
+                                if let Some(ref command) = config
+                                    .post_create
+                                    .clone()
+                                    .or_else(find_convention_hook_file)
+                                {
                                     // Resolve connection string
                                     let mut conn_url = created_branch.connection_string.clone();
                                     if conn_url.is_none() {
@@ -442,7 +459,8 @@ fn main() {
                                     }
 
                                     if let Some(conn_str) = conn_url {
-                                        let rewritten = rewrite_connection_string(&conn_str, &config.database);
+                                        let rewritten =
+                                            rewrite_connection_string(&conn_str, &config.database);
                                         eprintln!("Running post-creation hook: {}", command);
                                         if let Err(e) = run_post_create_hook(
                                             command,
@@ -455,8 +473,12 @@ fn main() {
                                             std::process::exit(1);
                                         }
                                     } else {
-                                        if config.post_create.is_some() || find_convention_hook_file().is_some() {
-                                            eprintln!("Warning: Skipping post-creation hook because database connection URL could not be retrieved.");
+                                        if config.post_create.is_some()
+                                            || find_convention_hook_file().is_some()
+                                        {
+                                            eprintln!(
+                                                "Warning: Skipping post-creation hook because database connection URL could not be retrieved."
+                                            );
                                         }
                                     }
                                 }
@@ -636,7 +658,11 @@ fn main() {
                         cache::set_cached_url(&branch_name, &rewritten);
 
                         if !skip_post_create {
-                            if let Some(ref command) = config.post_create.clone().or_else(find_convention_hook_file) {
+                            if let Some(ref command) = config
+                                .post_create
+                                .clone()
+                                .or_else(find_convention_hook_file)
+                            {
                                 eprintln!("Running post-creation hook: {}", command);
                                 if let Err(e) = run_post_create_hook(
                                     command,
@@ -652,8 +678,11 @@ fn main() {
                         }
                     } else {
                         if !skip_post_create {
-                            if config.post_create.is_some() || find_convention_hook_file().is_some() {
-                                                eprintln!("Warning: Skipping post-creation hook because database connection URL could not be retrieved.");
+                            if config.post_create.is_some() || find_convention_hook_file().is_some()
+                            {
+                                eprintln!(
+                                    "Warning: Skipping post-creation hook because database connection URL could not be retrieved."
+                                );
                             }
                         }
                     }
@@ -873,7 +902,9 @@ fn run_post_create_hook(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::inherit());
 
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn hook: {}", e))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn hook: {}", e))?;
 
     // Forward child's stdout to stderr of the parent
     let stdout_thread = if let Some(stdout) = child.stdout.take() {
@@ -895,7 +926,9 @@ fn run_post_create_hook(
         None
     };
 
-    let status = child.wait().map_err(|e| format!("Failed to wait for hook: {}", e))?;
+    let status = child
+        .wait()
+        .map_err(|e| format!("Failed to wait for hook: {}", e))?;
     if let Some(t) = stdout_thread {
         let _ = t.join();
     }
@@ -954,11 +987,7 @@ mod tests {
 
     #[test]
     fn test_run_post_create_hook_failure() {
-        let command = if cfg!(windows) {
-            "exit 42"
-        } else {
-            "exit 42"
-        };
+        let command = if cfg!(windows) { "exit 42" } else { "exit 42" };
         let config = config::ResolvedConfig {
             org: "test-org".to_string(),
             project: "test-proj".to_string(),
