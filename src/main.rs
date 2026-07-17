@@ -107,6 +107,13 @@ enum Commands {
         /// The suffix of the branch to open. Defaults to current Git branch counterpart.
         name: Option<String>,
     },
+
+    /// Deletes all branches that do not have a equivalent in the local VCS anymore
+    Prune {
+        /// Bypass safety confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
 }
 
 /// Query current active Jujutsu revision or Git branch
@@ -792,6 +799,95 @@ fn main() {
                 }
             }
         }
+        Commands::Prune { yes } => {
+            let config = resolve_or_exit();
+            let prefix = match identity::resolve_identity() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let local_equivalents = match get_local_equivalents() {
+                Ok(eqs) => eqs,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let client = xata::XataClient::new(&config);
+            let branches = match client.list_branches() {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("API Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let mut to_prune = Vec::new();
+            for b in branches {
+                let is_mine = b.name == prefix || b.name.starts_with(&format!("{}-", prefix));
+                if is_mine {
+                    let suffix = if b.name == prefix {
+                        prefix.clone()
+                    } else {
+                        b.name[prefix.len() + 1..].to_string()
+                    };
+
+                    let slugified_suffix = identity::slugify(&suffix);
+                    if !local_equivalents.contains(&slugified_suffix) {
+                        to_prune.push(b.name);
+                    }
+                }
+            }
+
+            if to_prune.is_empty() {
+                eprintln!("No branches to prune.");
+                std::process::exit(0);
+            }
+
+            if !yes {
+                let _ = prompt::intro("Prune Branches");
+                eprintln!("The following remote branches do not exist in your local VCS:");
+                for b in &to_prune {
+                    eprintln!("  - {}", b);
+                }
+                let msg = format!("Permanently delete these {} branches?", to_prune.len());
+                match prompt::prompt_confirm(&msg, false) {
+                    Ok(true) => {}
+                    _ => {
+                        eprintln!("Operation aborted.");
+                        std::process::exit(1);
+                    }
+                }
+            }
+
+            let spinner = prompt::spinner();
+            spinner.start("Pruning branches...");
+            let mut deleted_count = 0;
+            for b in &to_prune {
+                spinner.set_message(format!("Deleting branch '{}'...", b));
+                match client.delete_branch(b) {
+                    Ok(_) => {
+                        cache::remove_cached_url(b);
+                        deleted_count += 1;
+                    }
+                    Err(e) => {
+                        if e.contains("404") || e.to_lowercase().contains("not found") {
+                            cache::remove_cached_url(b);
+                            deleted_count += 1;
+                        } else {
+                            spinner.stop("Pruning paused due to error.");
+                            eprintln!("API Error deleting branch '{}': {}", b, e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+            spinner.stop(format!("Successfully pruned {} branches.", deleted_count));
+        }
     }
 }
 
@@ -804,6 +900,113 @@ fn resolve_or_exit() -> config::ResolvedConfig {
             std::process::exit(3);
         }
     }
+}
+
+/// Collects all local VCS branch names and change IDs
+fn get_local_equivalents() -> Result<std::collections::HashSet<String>, String> {
+    use std::collections::HashSet;
+    let mut equivalents = HashSet::new();
+    let root = find_repository_root().unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    });
+
+    let has_git = root.join(".git").exists();
+    let has_jj = root.join(".jj").exists();
+
+    if !has_git && !has_jj {
+        return Err("No local VCS repository (.git or .jj) found in the current directory or its parent directories.".to_string());
+    }
+
+    if has_git {
+        // Retrieve local Git branches
+        let git_output = Command::new("git")
+            .args(["branch", "--format=%(refname:short)"])
+            .output();
+        match git_output {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let branch = line.trim();
+                    if !branch.is_empty() {
+                        equivalents.insert(identity::slugify(branch));
+                    }
+                }
+            }
+            _ => {
+                eprintln!("Warning: Failed to retrieve local Git branches.");
+            }
+        }
+    }
+
+    if has_jj {
+        // Retrieve visible Jujutsu change IDs
+        let jj_log = Command::new("jj")
+            .args([
+                "log",
+                "-r",
+                "all()",
+                "-T",
+                "change_id.short(12) ++ \"\\n\"",
+                "--no-graph",
+                "--color=never",
+            ])
+            .output();
+        match jj_log {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let change_id = line.trim();
+                    if !change_id.is_empty() {
+                        equivalents.insert(identity::slugify(change_id));
+                    }
+                }
+            }
+            _ => {
+                eprintln!("Warning: Failed to retrieve visible Jujutsu revisions.");
+            }
+        }
+
+        // Retrieve Jujutsu bookmarks
+        let mut jj_bookmarks = Command::new("jj")
+            .args([
+                "bookmark",
+                "list",
+                "-T",
+                "name ++ \"\\n\"",
+                "--color=never",
+            ])
+            .output();
+
+        // Fallback to "branch list" if bookmark list fails or is unrecognized
+        if jj_bookmarks.is_err() || !jj_bookmarks.as_ref().unwrap().status.success() {
+            jj_bookmarks = Command::new("jj")
+                .args([
+                    "branch",
+                    "list",
+                    "-T",
+                    "name ++ \"\\n\"",
+                    "--color=never",
+                ])
+                .output();
+        }
+
+        match jj_bookmarks {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let bookmark = line.trim();
+                    if !bookmark.is_empty() {
+                        equivalents.insert(identity::slugify(bookmark));
+                    }
+                }
+            }
+            _ => {
+                eprintln!("Warning: Failed to retrieve Jujutsu bookmarks.");
+            }
+        }
+    }
+
+    Ok(equivalents)
 }
 
 /// Interactive initialization session
@@ -1315,5 +1518,14 @@ mod tests {
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert!(err.contains("42"));
+    }
+
+    #[test]
+    fn test_get_local_equivalents() {
+        let eqs = get_local_equivalents().unwrap();
+        if let Some(current) = get_current_vcs_branch_or_revision() {
+            let slugified = identity::slugify(&current);
+            assert!(eqs.contains(&slugified), "Equivalents {:?} should contain {}", eqs, slugified);
+        }
     }
 }
