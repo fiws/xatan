@@ -45,7 +45,7 @@ XATA_DATABASE_NAME="your-db"
 - **`url [NAME] [--create]`**: Print the Postgres connection string for a branch. Auto-creates it if `--create` is set.
 - **`create <NAME> [--parent <BRANCH>]`**: Create an isolated branch cloned from a parent.
 - **`list [--mine] [--all]`**: List database branches, showing only your own by default.
-- **`sync [NAME] [--from <BRANCH>] [-y]`**: Re-clone schema and data from a parent.
+- **`recreate [NAME] [--from <BRANCH>] [-y]`**: Re-clone schema and data from a parent.
 - **`delete [NAME] [-y]`**: Delete a branch safely.
 - **`shell [NAME]`**: Open an interactive `psql` connection.
 
@@ -53,7 +53,7 @@ XATA_DATABASE_NAME="your-db"
 
 ## Post-Creation Database Hooks
 
-`xatan` supports executing automated post-creation database modification scripts (e.g., seeding, migrations, or database initialization) immediately after a new database branch is dynamically created (via `url --create` or `create`) or synchronized (via `sync`).
+`xatan` supports executing automated post-creation database modification scripts (e.g., seeding, migrations, or database initialization) immediately after a new database branch is dynamically created (via `url --create` or `create`) or recreated (via `recreate`).
 
 ### 1. Explicit Configuration
 
@@ -104,7 +104,7 @@ To temporarily bypass the post-creation hook for a specific command run, pass th
 ```bash
 xatan url --create --skip-post-create
 xatan create feature-branch --skip-post-create
-xatan sync --skip-post-create
+xatan recreate --skip-post-create
 ```
 
 ---
@@ -155,9 +155,9 @@ Optionally, set up mise tasks to quickly interact with your database:
 description = "Launch psql shell targeting your isolated branch"
 run = "xatan shell"
 
-[tasks."db:sync"]
-description = "Re-sync your branch schema & data from main"
-run = "xatan sync -y"
+[tasks."db:recreate"]
+description = "Recreate your branch schema & data from main"
+run = "xatan recreate -y"
 ```
 
 ---

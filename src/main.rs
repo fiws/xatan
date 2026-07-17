@@ -70,12 +70,12 @@ enum Commands {
         #[arg(long, conflicts_with = "mine")]
         all: bool,
     },
-    /// Re-clones or re-syncs schema/data from a parent branch
-    Sync {
-        /// The suffix of the branch to sync. Defaults to current Git branch counterpart.
+    /// Re-creates (re-clones) a branch from a parent, tearing down the old one
+    Recreate {
+        /// The suffix of the branch to recreate. Defaults to current Git branch counterpart.
         name: Option<String>,
 
-        /// The parent branch to re-sync from
+        /// The parent branch to recreate from
         #[arg(long)]
         from: Option<String>,
 
@@ -607,7 +607,7 @@ fn main() {
                 }
             }
         }
-        Commands::Sync {
+        Commands::Recreate {
             name,
             from,
             yes,
@@ -625,9 +625,9 @@ fn main() {
             let from_parent = from.as_deref().unwrap_or(&config.fallback_parent);
 
             if !yes {
-                let _ = prompt::intro("xatan sync");
+                let _ = prompt::intro("xatan recreate");
                 let msg = format!(
-                    "Are you sure you want to re-sync branch '{}'? This will delete ALL its data and re-branch from '{}'.",
+                    "Are you sure you want to recreate branch '{}'? This will delete ALL its data and re-branch from '{}'.",
                     branch_name, from_parent
                 );
                 match prompt::prompt_confirm(&msg, false) {
@@ -642,7 +642,7 @@ fn main() {
             let client = xata::XataClient::new(&config);
             let from_parent_id = resolve_parent_id(&client, from_parent);
             let spinner = prompt::spinner();
-            spinner.start(format!("Synchronizing '{}'...", branch_name));
+            spinner.start(format!("Recreating '{}'...", branch_name));
 
             spinner.set_message("Tearing down old branch...");
             if let Err(e) = client.delete_branch(&branch_name) {
@@ -656,7 +656,7 @@ fn main() {
             spinner.set_message(format!("Cloning new branch from '{}'...", from_parent));
             match client.create_branch(&branch_name, Some(&from_parent_id)) {
                 Ok(created) => {
-                    spinner.stop("Synchronization complete.");
+                    spinner.stop("Recreation complete.");
                     let mut conn_url = created.connection_string.clone();
                     if conn_url.is_none() {
                         if let Ok(Some(fetched)) = client.get_branch(&branch_name) {

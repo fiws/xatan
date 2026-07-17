@@ -114,7 +114,7 @@ Implementations read configuration from a file named `.xatanrc` or `xatan.json` 
     },
     "postCreate": {
       "type": "string",
-      "description": "An optional hook command to run immediately after a database branch is created or synchronized"
+      "description": "An optional hook command to run immediately after a database branch is created or recreated"
     }
   },
   "required": ["org", "project", "database"]
@@ -126,7 +126,7 @@ Implementations read configuration from a file named `.xatanrc` or `xatan.json` 
 To support seamless CI/CD, scripting, and manual override capabilities, `xatan` resolves its credentials and settings through both environment variables and local config files using a defined resolution process.
 
 #### 1. Authentication
-All commands interacting with the Xata API (including `url`, `create`, `list`, `sync`, `delete`, and `shell`) require authentication.
+All commands interacting with the Xata API (including `url`, `create`, `list`, `recreate`, `delete`, and `shell`) require authentication.
 * **API Key:** `xatan` expects the **`XATA_API_KEY`** environment variable to be set for authentication.
 * If `XATA_API_KEY` is missing or empty when executing an API-interacting command, the tool MUST print a structured error message to `stderr` and exit with code `3` (Authentication / Config Missing).
 
@@ -280,21 +280,21 @@ OPTIONS:
 
 ---
 
-### 4.6. `sync`
-Re-clones or re-syncs schema/data from a parent branch. Because database branching in Xata is instantaneous, a synchronization is accomplished by a rapid tear-down and re-branch.
+### 4.6. `recreate`
+Re-clones or recreates schema/data from a parent branch. Because database branching in Xata is instantaneous, recreation is accomplished by a rapid tear-down and re-branch.
 
 ```text
-xatan-sync 
-Re-clone or re-sync schema and data from a parent branch
+xatan-recreate 
+Re-clone or recreate schema and data from a parent branch
 
 USAGE:
-    xatan sync [OPTIONS] [NAME]
+    xatan recreate [OPTIONS] [NAME]
 
 ARGS:
-    [NAME]    The suffix of the branch to sync. Defaults to current Git branch counterpart.
+    [NAME]    The suffix of the branch to recreate. Defaults to current Git branch counterpart.
 
 OPTIONS:
-    --from <BRANCH>       The parent branch to re-sync from [default: main]
+    --from <BRANCH>       The parent branch to recreate from [default: main]
     -y, --yes             Bypass safety confirmation prompt
     --skip-post-create    Skip executing the post-creation database hook
 ```
@@ -308,7 +308,7 @@ OPTIONS:
   6. Print success confirmation to `stderr`.
 * **Exit Codes:**
   * `0`: Success.
-  * `1`: Sync operation failed or was aborted.
+  * `1`: Recreate operation failed or was aborted.
 
 ---
 
