@@ -903,8 +903,90 @@ fn rewrite_connection_string(conn_str: &str, db_name: &str) -> String {
             return format!("{}{}/{}{}", scheme, host_part, db_name, query_part);
         }
     }
-    conn_str.to_string()
+conn_str.to_string()
 }
+
+#[cfg(test)]
+const MAX_ATTEMPTS: usize = 2;
+#[cfg(test)]
+const SLEEP_DURATION: std::time::Duration = std::time::Duration::from_millis(10);
+#[cfg(test)]
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(10);
+
+#[cfg(not(test))]
+const MAX_ATTEMPTS: usize = 30;
+#[cfg(not(test))]
+const SLEEP_DURATION: std::time::Duration = std::time::Duration::from_secs(1);
+#[cfg(not(test))]
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+fn parse_host_port(connection_url: &str) -> Option<(String, u16)> {
+    let scheme_idx = connection_url.find("://")?;
+    let rest = &connection_url[scheme_idx + 3..];
+    let end_idx = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
+    let host_and_auth = &rest[..end_idx];
+
+    let host_port = if let Some(at_idx) = host_and_auth.find('@') {
+        &host_and_auth[at_idx + 1..]
+    } else {
+        host_and_auth
+    };
+
+    let (host, port) = if let Some(colon_idx) = host_port.rfind(':') {
+        let port_str = &host_port[colon_idx + 1..];
+        if let Ok(p) = port_str.parse::<u16>() {
+            (&host_port[..colon_idx], p)
+        } else {
+            (host_port, 5432)
+        }
+    } else {
+        (host_port, 5432)
+    };
+
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    Some((host.to_string(), port))
+}
+
+fn wait_for_database(connection_url: &str) -> Result<(), String> {
+    let (host, port) = parse_host_port(connection_url)
+        .ok_or_else(|| "Invalid database connection URL".to_string())?;
+
+    use std::net::ToSocketAddrs;
+
+    eprintln!("Checking database availability at {}:{}...", host, port);
+
+    for attempt in 1..=MAX_ATTEMPTS {
+        match (host.as_str(), port).to_socket_addrs() {
+            Ok(addrs) => {
+                let mut connected = false;
+                for addr in addrs {
+                    if std::net::TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT).is_ok() {
+                        connected = true;
+                        break;
+                    }
+                }
+                if connected {
+                    return Ok(());
+                }
+            }
+            Err(_) => {}
+        }
+
+        if attempt < MAX_ATTEMPTS {
+            eprintln!(
+                "Database not ready yet, retrying in 1s (attempt {}/{})...",
+                attempt, MAX_ATTEMPTS
+            );
+            std::thread::sleep(SLEEP_DURATION);
+        }
+    }
+
+    Err(format!(
+        "Database at {}:{} did not become ready after {} attempts",
+        host, port, MAX_ATTEMPTS
+    ))
+}
+
 /// Executes the post-creation hook subprocess in a platform-appropriate shell.
 /// Ensures standard output of the child is forwarded to standard error of the parent
 /// to avoid standard output pollution, while standard error is inherited directly.
@@ -915,6 +997,8 @@ fn run_post_create_hook(
     parent_branch: &str,
     config: &config::ResolvedConfig,
 ) -> Result<(), String> {
+    wait_for_database(connection_url)?;
+
     use std::io::IsTerminal;
     let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
 
@@ -1169,7 +1253,57 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_host_port() {
+        assert_eq!(
+            parse_host_port("postgresql://user:pass@localhost:5432/mydb"),
+            Some(("localhost".to_string(), 5432))
+        );
+        assert_eq!(
+            parse_host_port("postgresql://localhost/mydb"),
+            Some(("localhost".to_string(), 5432))
+        );
+        assert_eq!(
+            parse_host_port("postgresql://user:pass@[::1]:5432/mydb"),
+            Some(("::1".to_string(), 5432))
+        );
+        assert_eq!(
+            parse_host_port("postgresql://[::1]/mydb"),
+            Some(("::1".to_string(), 5432))
+        );
+        assert_eq!(
+            parse_host_port("postgres://some-host:1234?sslmode=require"),
+            Some(("some-host".to_string(), 1234))
+        );
+        assert_eq!(
+            parse_host_port("invalid-url"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_wait_for_database_success() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
+        assert!(wait_for_database(&conn_url).is_ok());
+    }
+
+    #[test]
+    fn test_wait_for_database_failure() {
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
+        assert!(wait_for_database(&conn_url).is_err());
+    }
+
+    #[test]
     fn test_run_post_create_hook_success() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
+
         let command = if cfg!(windows) {
             "echo [HOOK_TEST_OK] %DATABASE_URL%"
         } else {
@@ -1185,7 +1319,7 @@ mod tests {
         };
         let res = run_post_create_hook(
             command,
-            "postgresql://user:pass@localhost:5432/mydb",
+            &conn_url,
             "test-branch",
             "main",
             &config,
@@ -1195,6 +1329,10 @@ mod tests {
 
     #[test]
     fn test_run_post_create_hook_failure() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
+
         let command = if cfg!(windows) { "exit 42" } else { "exit 42" };
         let config = config::ResolvedConfig {
             org: "test-org".to_string(),
@@ -1206,7 +1344,7 @@ mod tests {
         };
         let res = run_post_create_hook(
             command,
-            "postgresql://user:pass@localhost:5432/mydb",
+            &conn_url,
             "test-branch",
             "main",
             &config,
