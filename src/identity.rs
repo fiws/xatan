@@ -22,11 +22,9 @@ pub fn slugify(s: &str) -> String {
         if c.is_ascii_alphanumeric() {
             result.push(c.to_ascii_lowercase());
             in_hyphen = false;
-        } else {
-            if !in_hyphen {
-                result.push('-');
-                in_hyphen = true;
-            }
+        } else if !in_hyphen {
+            result.push('-');
+            in_hyphen = true;
         }
     }
     // Trim leading/trailing hyphens

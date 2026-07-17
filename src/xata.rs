@@ -58,11 +58,10 @@ impl XataClient {
     fn handle_error_response(&self, response: ureq::Response) -> String {
         let status = response.status();
         let text = response.into_string().unwrap_or_default();
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text)
+            && let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
                 return format!("Xata API error ({}): {}", status, msg);
             }
-        }
         format!("Xata API error ({}): {}", status, text)
     }
 

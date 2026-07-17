@@ -136,13 +136,12 @@ pub fn parse_database_url(url: &str) -> (Option<String>, Option<String>, Option<
 
     let mut db_name = None;
     let path_segments: Vec<&str> = parts.collect();
-    if let Some(pos) = path_segments.iter().position(|&s| s == "db") {
-        if pos + 1 < path_segments.len() {
+    if let Some(pos) = path_segments.iter().position(|&s| s == "db")
+        && pos + 1 < path_segments.len() {
             let db_segment = path_segments[pos + 1];
             let clean_db = db_segment.split(':').next().unwrap_or(db_segment);
             db_name = Some(clean_db.to_string());
         }
-    }
 
     let host_parts: Vec<&str> = host.split('.').collect();
     let subdomain = host_parts.first().unwrap_or(&"");
@@ -178,8 +177,8 @@ pub fn get_xata_defaults() -> (Option<String>, Option<String>, Option<String>) {
             "xatarc.json",
         ];
         for f in files {
-            if let Ok(content) = std::fs::read_to_string(f) {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Ok(content) = std::fs::read_to_string(f)
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                     let db_url = val
                         .get("databaseURL")
                         .or_else(|| val.get("databaseUrl"))
@@ -198,7 +197,6 @@ pub fn get_xata_defaults() -> (Option<String>, Option<String>, Option<String>) {
                         }
                     }
                 }
-            }
         }
     }
 

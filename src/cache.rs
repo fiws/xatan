@@ -36,15 +36,12 @@ fn get_cache_path() -> Option<PathBuf> {
 }
 
 pub fn load_cache() -> XatanCache {
-    if let Some(path) = get_cache_path() {
-        if path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                if let Ok(cache) = serde_json::from_str::<XatanCache>(&content) {
+    if let Some(path) = get_cache_path()
+        && path.exists()
+            && let Ok(content) = std::fs::read_to_string(&path)
+                && let Ok(cache) = serde_json::from_str::<XatanCache>(&content) {
                     return cache;
                 }
-            }
-        }
-    }
     XatanCache::default()
 }
 pub fn save_cache(cache: &XatanCache) {
