@@ -1388,7 +1388,6 @@ fn run_post_create_hook(
     config: &config::ResolvedConfig,
     is_background_worker: bool,
 ) -> Result<(), String> {
-
     if is_background_worker {
         // 1. BACKGROUND WORKER MODE (runs asynchronously in background worker process)
         // Wait for database quietly (without TTY, wait_for_database is silent)
