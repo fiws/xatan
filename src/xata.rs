@@ -45,7 +45,7 @@ impl XataClient {
     }
 
     /// Builder method to override the base URL (useful for mock testing)
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn with_base_url(mut self, url: String) -> Self {
         self.base_url = url;
         self

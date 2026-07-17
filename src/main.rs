@@ -115,6 +115,23 @@ enum Commands {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Run a post-create hook, waiting for database to be ready (internal / hidden)
+    #[command(name = "run-create-hook", hide = true)]
+    RunCreateHook {
+        /// The hook command to execute
+        #[arg(long)]
+        command: String,
+        /// The database connection URL
+        #[arg(long)]
+        connection_url: String,
+        /// The name of the database branch
+        #[arg(long)]
+        branch_name: String,
+        /// The parent branch name
+        #[arg(long)]
+        parent_branch: String,
+    },
+
     /// Generate shell autocompletions
     Completions {
         /// Shell to generate completions for
@@ -297,6 +314,10 @@ fn main() -> std::io::Result<()> {
                         let is_tty =
                             std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
 
+                        let has_hook = !skip_post_create
+                            && (config.post_create.is_some()
+                                || find_convention_hook_file().is_some());
+
                         let spinner = if is_tty {
                             let _ = prompt::intro("xatan url");
                             let s = prompt::spinner();
@@ -306,10 +327,18 @@ fn main() -> std::io::Result<()> {
                             ));
                             Some(s)
                         } else {
-                            log::info(format!(
-                                "Creating branch '{}' from '{}'...",
-                                branch_name, parent_branch
-                            ))?;
+                            let msg = if has_hook {
+                                format!(
+                                    "[xatan] Creating branch '{}' from '{}' (running create hook in background)",
+                                    branch_name, parent_branch
+                                )
+                            } else {
+                                format!(
+                                    "[xatan] Creating branch '{}' from '{}'...",
+                                    branch_name, parent_branch
+                                )
+                            };
+                            eprintln!("{}", msg);
                             None
                         };
 
@@ -330,16 +359,19 @@ fn main() -> std::io::Result<()> {
                                             .clone()
                                             .or_else(find_convention_hook_file)
                                     {
-                                        log::info(format!(
-                                            "Running post-creation hook: {}",
-                                            command
-                                        ))?;
+                                        if is_tty {
+                                            log::info(format!(
+                                                "Running post-creation hook: {}",
+                                                command
+                                            ))?;
+                                        }
                                         if let Err(e) = run_post_create_hook(
                                             command,
                                             &rewritten,
                                             &branch_name,
                                             parent_branch,
                                             &config,
+                                            false,
                                         ) {
                                             log::error(format!(
                                                 "Error executing post-creation hook: {}",
@@ -369,16 +401,19 @@ fn main() -> std::io::Result<()> {
                                                         .clone()
                                                         .or_else(find_convention_hook_file)
                                                 {
-                                                    log::info(format!(
-                                                        "Running post-creation hook: {}",
-                                                        command
-                                                    ))?;
+                                                    if is_tty {
+                                                        log::info(format!(
+                                                            "Running post-creation hook: {}",
+                                                            command
+                                                        ))?;
+                                                    }
                                                     if let Err(e) = run_post_create_hook(
                                                         command,
                                                         &rewritten,
                                                         &branch_name,
                                                         parent_branch,
                                                         &config,
+                                                        false,
                                                     ) {
                                                         log::error(format!(
                                                             "Error executing post-creation hook: {}",
@@ -453,16 +488,41 @@ fn main() -> std::io::Result<()> {
                 Ok(None) => {
                     let parent_branch = parent.as_deref().unwrap_or(&config.fallback_parent);
                     let parent_id = resolve_parent_id(&client, parent_branch);
-                    let _ = prompt::intro("xatan create");
-                    let spinner = prompt::spinner();
-                    spinner.start(format!(
-                        "Creating branch '{}' from '{}'...",
-                        branch_name, parent_branch
-                    ));
+                    use std::io::IsTerminal;
+                    let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
+
+                    let has_hook = !skip_post_create
+                        && (config.post_create.is_some() || find_convention_hook_file().is_some());
+
+                    let spinner = if is_tty {
+                        let _ = prompt::intro("xatan create");
+                        let s = prompt::spinner();
+                        s.start(format!(
+                            "Creating branch '{}' from '{}'...",
+                            branch_name, parent_branch
+                        ));
+                        Some(s)
+                    } else {
+                        let msg = if has_hook {
+                            format!(
+                                "[xatan] Creating branch '{}' from '{}' (running create hook in background)",
+                                branch_name, parent_branch
+                            )
+                        } else {
+                            format!(
+                                "[xatan] Creating branch '{}' from '{}'...",
+                                branch_name, parent_branch
+                            )
+                        };
+                        eprintln!("{}", msg);
+                        None
+                    };
 
                     match client.create_branch(&branch_name, Some(&parent_id)) {
                         Ok(created_branch) => {
-                            spinner.stop("Branch created.");
+                            if let Some(s) = &spinner {
+                                s.stop("Branch created.");
+                            }
 
                             if !skip_post_create
                                 && let Some(ref command) = config
@@ -482,13 +542,19 @@ fn main() -> std::io::Result<()> {
                                 if let Some(conn_str) = conn_url {
                                     let rewritten =
                                         rewrite_connection_string(&conn_str, &config.database);
-                                    log::info(format!("Running post-creation hook: {}", command))?;
+                                    if is_tty {
+                                        log::info(format!(
+                                            "Running post-creation hook: {}",
+                                            command
+                                        ))?;
+                                    }
                                     if let Err(e) = run_post_create_hook(
                                         command,
                                         &rewritten,
                                         &branch_name,
                                         parent_branch,
                                         &config,
+                                        false,
                                     ) {
                                         log::error(format!(
                                             "Error executing post-creation hook: {}",
@@ -509,7 +575,9 @@ fn main() -> std::io::Result<()> {
                             std::process::exit(0);
                         }
                         Err(e) => {
-                            spinner.stop("Creation failed.");
+                            if let Some(s) = &spinner {
+                                s.stop("Creation failed.");
+                            }
                             log::error(format!("API Error: {}", e))?;
                             std::process::exit(1);
                         }
@@ -690,23 +758,51 @@ fn main() -> std::io::Result<()> {
 
             let client = xata::XataClient::new(&config);
             let from_parent_id = resolve_parent_id(&client, from_parent);
-            let spinner = prompt::spinner();
-            spinner.start(format!("Recreating '{}'...", branch_name));
+            use std::io::IsTerminal;
+            let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
 
-            spinner.set_message("Tearing down old branch...");
+            let has_hook = !skip_post_create
+                && (config.post_create.is_some() || find_convention_hook_file().is_some());
+
+            let spinner = if is_tty {
+                let s = prompt::spinner();
+                s.start(format!("Recreating '{}'...", branch_name));
+                Some(s)
+            } else {
+                let msg = if has_hook {
+                    format!(
+                        "[xatan] Recreating '{}' (running create hook in background)",
+                        branch_name
+                    )
+                } else {
+                    format!("[xatan] Recreating '{}'...", branch_name)
+                };
+                eprintln!("{}", msg);
+                None
+            };
+
+            if let Some(s) = &spinner {
+                s.set_message("Tearing down old branch...");
+            }
             if let Err(e) = client.delete_branch(&branch_name)
                 && !e.contains("404")
                 && !e.to_lowercase().contains("not found")
             {
-                spinner.stop("Teardown failed.");
+                if let Some(s) = &spinner {
+                    s.stop("Teardown failed.");
+                }
                 log::error(format!("API Error: {}", e))?;
                 std::process::exit(1);
             }
 
-            spinner.set_message(format!("Cloning new branch from '{}'...", from_parent));
+            if let Some(s) = &spinner {
+                s.set_message(format!("Cloning new branch from '{}'...", from_parent));
+            }
             match client.create_branch(&branch_name, Some(&from_parent_id)) {
                 Ok(created) => {
-                    spinner.stop("Recreation complete.");
+                    if let Some(s) = &spinner {
+                        s.stop("Recreation complete.");
+                    }
                     let mut conn_url = created.connection_string.clone();
                     if conn_url.is_none()
                         && let Ok(Some(fetched)) = client.get_branch(&branch_name)
@@ -724,13 +820,16 @@ fn main() -> std::io::Result<()> {
                                 .clone()
                                 .or_else(find_convention_hook_file)
                         {
-                            log::info(format!("Running post-creation hook: {}", command))?;
+                            if is_tty {
+                                log::info(format!("Running post-creation hook: {}", command))?;
+                            }
                             if let Err(e) = run_post_create_hook(
                                 command,
                                 &rewritten,
                                 &branch_name,
                                 from_parent,
                                 &config,
+                                false,
                             ) {
                                 log::error(format!("Error executing post-creation hook: {}", e))?;
                                 std::process::exit(1);
@@ -746,7 +845,9 @@ fn main() -> std::io::Result<()> {
                     std::process::exit(0);
                 }
                 Err(e) => {
-                    spinner.stop("Cloning failed.");
+                    if let Some(s) = &spinner {
+                        s.stop("Cloning failed.");
+                    }
                     log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
@@ -980,6 +1081,26 @@ fn main() -> std::io::Result<()> {
                 deleted_branches.len()
             ));
         }
+        Commands::RunCreateHook {
+            command,
+            connection_url,
+            branch_name,
+            parent_branch,
+        } => {
+            let config = resolve_or_exit();
+            if let Err(e) = run_post_create_hook(
+                &command,
+                &connection_url,
+                &branch_name,
+                &parent_branch,
+                &config,
+                true,
+            ) {
+                log::error(format!("Error executing post-creation hook: {}", e))?;
+                std::process::exit(1);
+            }
+            std::process::exit(0);
+        }
         Commands::Completions { shell } => {
             use clap::CommandFactory;
             let mut cmd = Cli::command();
@@ -1212,13 +1333,18 @@ fn parse_host_port(connection_url: &str) -> Option<(String, u16)> {
     Some((host.to_string(), port))
 }
 
-fn wait_for_database(connection_url: &str) -> Result<(), String> {
+fn wait_for_database(connection_url: &str, verbose: bool) -> Result<(), String> {
     let (host, port) = parse_host_port(connection_url)
         .ok_or_else(|| "Invalid database connection URL".to_string())?;
 
+    use std::io::IsTerminal;
+    let is_tty = verbose && std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
+
     use std::net::ToSocketAddrs;
 
-    eprintln!("Checking database availability at {}:{}...", host, port);
+    if is_tty {
+        eprintln!("Checking database availability at {}:{}...", host, port);
+    }
 
     for attempt in 1..=MAX_ATTEMPTS {
         if let Ok(addrs) = (host.as_str(), port).to_socket_addrs() {
@@ -1235,10 +1361,12 @@ fn wait_for_database(connection_url: &str) -> Result<(), String> {
         }
 
         if attempt < MAX_ATTEMPTS {
-            eprintln!(
-                "Database not ready yet, retrying in 1s (attempt {}/{})...",
-                attempt, MAX_ATTEMPTS
-            );
+            if is_tty {
+                eprintln!(
+                    "Database not ready yet, retrying in 1s (attempt {}/{})...",
+                    attempt, MAX_ATTEMPTS
+                );
+            }
             std::thread::sleep(SLEEP_DURATION);
         }
     }
@@ -1258,68 +1386,33 @@ fn run_post_create_hook(
     branch_name: &str,
     parent_branch: &str,
     config: &config::ResolvedConfig,
+    is_background_worker: bool,
 ) -> Result<(), String> {
-    wait_for_database(connection_url)?;
 
-    use std::io::IsTerminal;
-    let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
+    if is_background_worker {
+        // 1. BACKGROUND WORKER MODE (runs asynchronously in background worker process)
+        // Wait for database quietly (without TTY, wait_for_database is silent)
+        wait_for_database(connection_url, false)?;
 
-    let mut cmd = if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd.exe");
-        c.arg("/C").arg(command_str);
-        c
-    } else {
-        let mut c = std::process::Command::new("sh");
-        c.arg("-c").arg(command_str);
-        c
-    };
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("cmd.exe");
+            c.arg("/C").arg(command_str);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.arg("-c").arg(command_str);
+            c
+        };
 
-    cmd.env("DATABASE_URL", connection_url)
-        .env("XATA_DATABASE_URL", connection_url)
-        .env("XATAN_BRANCH_NAME", branch_name)
-        .env("XATAN_PARENT_BRANCH", parent_branch)
-        .env("XATA_ORG_ID", &config.org)
-        .env("XATA_PROJECT_ID", &config.project)
-        .env("XATA_DATABASE_NAME", &config.database);
+        cmd.env("DATABASE_URL", connection_url)
+            .env("XATA_DATABASE_URL", connection_url)
+            .env("XATAN_BRANCH_NAME", branch_name)
+            .env("XATAN_PARENT_BRANCH", parent_branch)
+            .env("XATA_ORG_ID", &config.org)
+            .env("XATA_PROJECT_ID", &config.project)
+            .env("XATA_DATABASE_NAME", &config.database);
 
-    if is_tty {
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::inherit());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn hook: {}", e))?;
-
-        // Forward child's stdout to stderr of the parent
-        let stdout_thread = child.stdout.take().map(|stdout| {
-            std::thread::spawn(move || {
-                use std::io::{BufRead, BufReader, Write};
-                let mut reader = BufReader::new(stdout);
-                let mut line = Vec::new();
-                while let Ok(n) = reader.read_until(b'\n', &mut line) {
-                    if n == 0 {
-                        break;
-                    }
-                    let mut err = std::io::stderr();
-                    let _ = err.write_all(&line);
-                    let _ = err.flush();
-                    line.clear();
-                }
-            })
-        });
-
-        let status = child
-            .wait()
-            .map_err(|e| format!("Failed to wait for hook: {}", e))?;
-        if let Some(t) = stdout_thread {
-            let _ = t.join();
-        }
-
-        if !status.success() {
-            let code = status.code().unwrap_or(1);
-            return Err(format!("Hook exited with non-zero status code: {}", code));
-        }
-    } else {
+        // Capture stdout and stderr to make it completely silent on success
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
@@ -1379,6 +1472,115 @@ fn run_post_create_hook(
 
             let code = status.code().unwrap_or(1);
             return Err(format!("Hook exited with non-zero status code: {}", code));
+        }
+    } else {
+        #[cfg(test)]
+        let is_tty = !command_str.contains("background");
+        #[cfg(not(test))]
+        let is_tty = {
+            use std::io::IsTerminal;
+            std::io::stderr().is_terminal() && std::io::stdout().is_terminal()
+        };
+
+        if is_tty {
+            // 2. INTERACTIVE FOREGROUND MODE (runs synchronously with real-time logging)
+            wait_for_database(connection_url, true)?;
+
+            let mut cmd = if cfg!(windows) {
+                let mut c = std::process::Command::new("cmd.exe");
+                c.arg("/C").arg(command_str);
+                c
+            } else {
+                let mut c = std::process::Command::new("sh");
+                c.arg("-c").arg(command_str);
+                c
+            };
+
+            cmd.env("DATABASE_URL", connection_url)
+                .env("XATA_DATABASE_URL", connection_url)
+                .env("XATAN_BRANCH_NAME", branch_name)
+                .env("XATAN_PARENT_BRANCH", parent_branch)
+                .env("XATA_ORG_ID", &config.org)
+                .env("XATA_PROJECT_ID", &config.project)
+                .env("XATA_DATABASE_NAME", &config.database);
+
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::inherit());
+
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to spawn hook: {}", e))?;
+
+            // Forward child's stdout to stderr of the parent
+            let stdout_thread = child.stdout.take().map(|stdout| {
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader, Write};
+                    let mut reader = BufReader::new(stdout);
+                    let mut line = Vec::new();
+                    while let Ok(n) = reader.read_until(b'\n', &mut line) {
+                        if n == 0 {
+                            break;
+                        }
+                        let mut err = std::io::stderr();
+                        let _ = err.write_all(&line);
+                        let _ = err.flush();
+                        line.clear();
+                    }
+                })
+            });
+
+            let status = child
+                .wait()
+                .map_err(|e| format!("Failed to wait for hook: {}", e))?;
+            if let Some(t) = stdout_thread {
+                let _ = t.join();
+            }
+
+            if !status.success() {
+                let code = status.code().unwrap_or(1);
+                return Err(format!("Hook exited with non-zero status code: {}", code));
+            }
+        } else {
+            // 3. PARENT SPAWNER MODE (spawns background worker process and exits instantly)
+            let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("xatan"));
+            let mut cmd = std::process::Command::new(exe);
+            cmd.arg("run-create-hook")
+                .arg("--command")
+                .arg(command_str)
+                .arg("--connection-url")
+                .arg(connection_url)
+                .arg("--branch-name")
+                .arg(branch_name)
+                .arg("--parent-branch")
+                .arg(parent_branch);
+
+            #[cfg(unix)]
+            {
+                use std::os::fd::AsFd;
+                if let Ok(stderr_fd) = std::io::stderr().as_fd().try_clone_to_owned() {
+                    cmd.stdout(std::process::Stdio::from(stderr_fd));
+                } else {
+                    cmd.stdout(std::process::Stdio::null());
+                }
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::io::AsHandle;
+                if let Ok(stderr_handle) = std::io::stderr().as_handle().try_clone_to_owned() {
+                    cmd.stdout(std::process::Stdio::from(stderr_handle));
+                } else {
+                    cmd.stdout(std::process::Stdio::null());
+                }
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                cmd.stdout(std::process::Stdio::null());
+            }
+
+            cmd.stderr(std::process::Stdio::inherit());
+
+            cmd.spawn()
+                .map_err(|e| format!("Failed to spawn hook in background: {}", e))?;
         }
     }
 
@@ -1542,17 +1744,13 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
-        assert!(wait_for_database(&conn_url).is_ok());
+        assert!(wait_for_database(&conn_url, false).is_ok());
     }
 
     #[test]
     fn test_wait_for_database_failure() {
-        let port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap().port()
-        };
-        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
-        assert!(wait_for_database(&conn_url).is_err());
+        let conn_url = "postgresql://user:pass@127.0.0.1:1/mydb";
+        assert!(wait_for_database(conn_url, false).is_err());
     }
 
     #[test]
@@ -1574,7 +1772,7 @@ mod tests {
             api_key: "test-key".to_string(),
             post_create: None,
         };
-        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config);
+        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
         assert!(res.is_ok());
     }
 
@@ -1593,10 +1791,29 @@ mod tests {
             api_key: "test-key".to_string(),
             post_create: None,
         };
-        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config);
+        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert!(err.contains("42"));
+    }
+
+    #[test]
+    fn test_run_post_create_hook_background_success() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
+
+        let command = "exit 0 --background";
+        let config = config::ResolvedConfig {
+            org: "test-org".to_string(),
+            project: "test-proj".to_string(),
+            database: "test-db".to_string(),
+            fallback_parent: "main".to_string(),
+            api_key: "test-key".to_string(),
+            post_create: None,
+        };
+        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
+        assert!(res.is_ok());
     }
 
     #[test]

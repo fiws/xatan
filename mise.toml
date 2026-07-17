@@ -3,3 +3,8 @@ description = "Build the release version of the CLI"
 run = "cargo build --release"
 sources = ["src/**/*.rs", "Cargo.toml", "Cargo.lock"]
 outputs = ["target/release/xatan"]
+
+[tasks.check]
+description = "Run cargo check"
+run = "cargo check --all-features"
+sources = ["src/**/*.rs", "Cargo.toml", "Cargo.lock"]
