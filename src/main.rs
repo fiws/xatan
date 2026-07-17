@@ -34,9 +34,13 @@ enum Commands {
         /// The suffix of the target branch. Defaults to current Git branch counterpart.
         name: Option<String>,
 
-        /// Auto-create the branch in Xata if it does not exist
-        #[arg(long)]
+        /// Auto-create the branch in Xata if it does not exist (this is now the default)
+        #[arg(long, overrides_with = "no_create")]
         create: bool,
+
+        /// Do not auto-create the branch in Xata if it does not exist
+        #[arg(long, overrides_with = "create")]
+        no_create: bool,
 
         /// The parent branch to clone from if creating
         #[arg(long)]
@@ -254,10 +258,12 @@ fn main() {
         },
         Commands::Url {
             name,
-            create,
+            create: _,
+            no_create,
             parent,
             skip_post_create,
         } => {
+            let create = !no_create;
             let config = resolve_or_exit();
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
@@ -399,10 +405,9 @@ fn main() {
                         }
                     } else {
                         eprintln!(
-                            "Error: Branch '{}' does not exist. Use --create to create it dynamically.",
+                            "Error: Branch '{}' does not exist. Omit --no-create to create it dynamically.",
                             branch_name
                         );
-                        std::process::exit(2);
                     }
                 }
                 Err(e) => {

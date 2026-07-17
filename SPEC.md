@@ -202,10 +202,10 @@ ARGS:
               to the slugified name of the active Git branch.
 
 OPTIONS:
-    --create              Auto-create the branch in Xata if it does not exist
+    --create              Auto-create the branch in Xata if it does not exist (default)
+    --no-create           Do not auto-create the branch in Xata if it does not exist
     --parent <BRANCH>     The parent branch to clone from if creating [default: main]
     --skip-post-create    Skip executing the post-creation database hook
-```
 
 * **Resolution Logic:**
   1. Determine developer prefix (e.g., `jane-doe`).
@@ -216,11 +216,11 @@ OPTIONS:
   4. Query Xata API to see if `<prefix>-<suffix>` exists.
   5. **Branch Exists:** Retrieve its connection URL, write it to `stdout`, and exit `0`.
   6. **Branch is Missing:**
-     * If `--create` is set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL, write it to `stdout`, and exit `0`.
+     * If `--no-create` is not set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL, write it to `stdout`, and exit `0`.
 * **Exit Codes:**
   * `0`: Success (printed URL to stdout).
   * `1`: General Error (invalid configuration, missing network).
-  * `2`: Branch not found (when `--create` is omitted).
+  * `2`: Branch not found (when `--no-create` is set).
 
 ---
 

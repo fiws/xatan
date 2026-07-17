@@ -42,7 +42,7 @@ XATA_DATABASE_NAME="your-db"
 ## Commands
 
 - **`whoami`**: Print your unique developer identity prefix (e.g., `me-fiws-net`).
-- **`url [NAME] [--create]`**: Print the Postgres connection string for a branch. Auto-creates it if `--create` is set.
+- **`url [NAME] [--no-create]`**: Print the Postgres connection string for a branch. Auto-creates it if it does not exist (unless `--no-create` is passed).
 - **`create <NAME> [--parent <BRANCH>]`**: Create an isolated branch cloned from a parent.
 - **`list [--mine] [--all]`**: List database branches, showing only your own by default.
 - **`recreate [NAME] [--from <BRANCH>] [-y]`**: Re-clone schema and data from a parent.
@@ -53,7 +53,7 @@ XATA_DATABASE_NAME="your-db"
 
 ## Post-Creation Database Hooks
 
-`xatan` supports executing automated post-creation database modification scripts (e.g., seeding, migrations, or database initialization) immediately after a new database branch is dynamically created (via `url --create` or `create`) or recreated (via `recreate`).
+`xatan` supports executing automated post-creation database modification scripts (e.g., seeding, migrations, or database initialization) immediately after a new database branch is dynamically created (via `url` or `create`) or recreated (via `recreate`).
 
 ### 1. Explicit Configuration
 
@@ -95,14 +95,14 @@ The post-creation script subprocess runs with the following automatically inject
 
 ### 4. Direct Stream Separation & Piping
 
-The stdout of the hook subprocess is automatically captured and redirected to standard error (`stderr`) of the `xatan` parent process. This guarantees that your hook's console output is safely visible in your terminal, while strictly preserving clean `stdout` separation so dynamic evaluation chains like `DATABASE_URL=$(xatan url --create)` work without pollution.
+The stdout of the hook subprocess is automatically captured and redirected to standard error (`stderr`) of the `xatan` parent process. This guarantees that your hook's console output is safely visible in your terminal, while strictly preserving clean `stdout` separation so dynamic evaluation chains like `DATABASE_URL=$(xatan url)` work without pollution.
 
 ### 5. Bypassing the Hook
 
 To temporarily bypass the post-creation hook for a specific command run, pass the `--skip-post-create` flag:
 
 ```bash
-xatan url --create --skip-post-create
+xatan url --skip-post-create
 xatan create feature-branch --skip-post-create
 xatan recreate --skip-post-create
 ```
@@ -122,7 +122,7 @@ Because `xatan` automatically and natively caches connection URLs locally (with 
 ```toml
 # mise.toml
 [env]
-DATABASE_URL = "{{ exec(command='xatan url --create') }}"
+DATABASE_URL = "{{ exec(command='xatan url') }}"
 ```
 
 Now, any application or ORM (like Prisma, Drizzle, or `psql`) in this directory can automatically connect to your isolated developer branch with zero manual steps!
@@ -166,5 +166,5 @@ run = "xatan recreate -y"
 
 - `0`: Success.
 - `1`: Failure / Aborted Prompt / System or Network Error.
-- `2`: Target Branch Missing (e.g., calling `url` without `--create`).
+- `2`: Target Branch Missing (e.g., calling `url` with `--no-create`).
 - `3`: Authentication / Config Missing (e.g., empty required environment variables).
