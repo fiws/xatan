@@ -525,7 +525,7 @@ fn main() -> std::io::Result<()> {
             };
 
             let client = xata::XataClient::new(&config);
-            let mut branches = match client.list_branches() {
+            let branches = match client.list_branches() {
                 Ok(b) => b,
                 Err(e) => {
                     log::error(format!("API Error: {}", e))?;
@@ -533,7 +533,8 @@ fn main() -> std::io::Result<()> {
                 }
             };
 
-            branches.sort_by(|a, b| {
+            let mut display_branches = branches.clone();
+            display_branches.sort_by(|a, b| {
                 let a_is_mine = a.name.starts_with(&prefix);
                 let b_is_mine = b.name.starts_with(&prefix);
                 if a_is_mine != b_is_mine {
@@ -544,10 +545,10 @@ fn main() -> std::io::Result<()> {
             });
 
             if !all {
-                branches.retain(|b| b.name.starts_with(&prefix));
+                display_branches.retain(|b| b.name.starts_with(&prefix));
             }
 
-            if branches.is_empty() {
+            if display_branches.is_empty() {
                 println!("No branches found.");
                 std::process::exit(0);
             }
@@ -560,10 +561,19 @@ fn main() -> std::io::Result<()> {
             let mut max_created_len = 10;
 
             let mut formatted_branches = Vec::new();
-            for b in &branches {
+            for b in &display_branches {
                 let is_mine = b.name.starts_with(&prefix);
                 let is_active = Some(&b.name) == active_branch.as_ref();
-                let parent_str = b.parent_id.as_deref().unwrap_or("-").to_string();
+                let parent_str = if let Some(ref pid) = b.parent_id {
+                    branches
+                        .iter()
+                        .find(|parent| parent.id == *pid)
+                        .map(|parent| parent.name.as_str())
+                        .unwrap_or(pid.as_str())
+                        .to_string()
+                } else {
+                    "-".to_string()
+                };
                 let created_str = b
                     .created_at
                     .as_deref()
@@ -577,19 +587,29 @@ fn main() -> std::io::Result<()> {
                 formatted_branches.push((b, is_mine, is_active, parent_str, created_str));
             }
 
-            let header = format!(
-                "    {:width_name$} | {:width_parent$} | {:width_created$}",
-                "Branch Name",
-                "Parent",
-                "Created At",
-                width_name = max_name_len,
-                width_parent = max_parent_len,
-                width_created = max_created_len
-            );
-            let divider = "-".repeat(header.len());
+            let width_name = max_name_len + 4;
+            let width_parent = max_parent_len;
+            let width_created = max_created_len;
 
-            println!("{}", header);
-            println!("{}", divider);
+            println!(
+                "┌─{}─┬─{}─┬─{}─┐",
+                "─".repeat(width_name),
+                "─".repeat(width_parent),
+                "─".repeat(width_created)
+            );
+            println!(
+                "│ {:<width_name$} │ {:<width_parent$} │ {:<width_created$} │",
+                "Branch Name", "Parent", "Created At",
+                width_name = width_name,
+                width_parent = width_parent,
+                width_created = width_created
+            );
+            println!(
+                "├─{}─┼─{}─┼─{}─┤",
+                "─".repeat(width_name),
+                "─".repeat(width_parent),
+                "─".repeat(width_created)
+            );
 
             for (b, is_mine, is_active, parent_str, created_str) in formatted_branches {
                 let indicator = if is_active {
@@ -600,23 +620,32 @@ fn main() -> std::io::Result<()> {
                     "   "
                 };
 
+                let spaces_count = max_name_len.saturating_sub(b.name.len());
+                let name_display = if is_mine && is_atty {
+                    format!("\x1b[1;32m{}\x1b[0m{}", b.name, " ".repeat(spaces_count))
+                } else {
+                    format!("{}{}", b.name, " ".repeat(spaces_count))
+                };
+
+                let name_with_indicator = format!("{} {}", indicator, name_display);
                 let row = format!(
-                    "{} {:width_name$} | {:width_parent$} | {:width_created$}",
-                    indicator,
-                    b.name,
+                    "│ {} │ {:<width_parent$} │ {:<width_created$} │",
+                    name_with_indicator,
                     parent_str,
                     created_str,
-                    width_name = max_name_len,
-                    width_parent = max_parent_len,
-                    width_created = max_created_len
+                    width_parent = width_parent,
+                    width_created = width_created
                 );
 
-                if is_mine && is_atty {
-                    println!("\x1b[1;32m{}\x1b[0m", row);
-                } else {
-                    println!("{}", row);
-                }
+                println!("{}", row);
             }
+
+            println!(
+                "└─{}─┴─{}─┴─{}─┘",
+                "─".repeat(width_name),
+                "─".repeat(width_parent),
+                "─".repeat(width_created)
+            );
         }
         Commands::Recreate {
             name,
