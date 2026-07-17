@@ -15,9 +15,10 @@ pub fn outro(message: &str) -> io::Result<()> {
 pub fn prompt_text(message: &str, default: Option<&str>) -> Result<String, String> {
     let mut p = cliclack::input(message);
     if let Some(def) = default
-        && !def.is_empty() {
-            p = p.default_input(def);
-        }
+        && !def.is_empty()
+    {
+        p = p.default_input(def);
+    }
     p.interact().map_err(|e| {
         if e.kind() == io::ErrorKind::Interrupted {
             "Operation cancelled.".to_string()

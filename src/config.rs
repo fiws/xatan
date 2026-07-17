@@ -137,11 +137,12 @@ pub fn parse_database_url(url: &str) -> (Option<String>, Option<String>, Option<
     let mut db_name = None;
     let path_segments: Vec<&str> = parts.collect();
     if let Some(pos) = path_segments.iter().position(|&s| s == "db")
-        && pos + 1 < path_segments.len() {
-            let db_segment = path_segments[pos + 1];
-            let clean_db = db_segment.split(':').next().unwrap_or(db_segment);
-            db_name = Some(clean_db.to_string());
-        }
+        && pos + 1 < path_segments.len()
+    {
+        let db_segment = path_segments[pos + 1];
+        let clean_db = db_segment.split(':').next().unwrap_or(db_segment);
+        db_name = Some(clean_db.to_string());
+    }
 
     let host_parts: Vec<&str> = host.split('.').collect();
     let subdomain = host_parts.first().unwrap_or(&"");
@@ -178,25 +179,26 @@ pub fn get_xata_defaults() -> (Option<String>, Option<String>, Option<String>) {
         ];
         for f in files {
             if let Ok(content) = std::fs::read_to_string(f)
-                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let db_url = val
-                        .get("databaseURL")
-                        .or_else(|| val.get("databaseUrl"))
-                        .and_then(|v| v.as_str());
+                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+            {
+                let db_url = val
+                    .get("databaseURL")
+                    .or_else(|| val.get("databaseUrl"))
+                    .and_then(|v| v.as_str());
 
-                    if let Some(url) = db_url {
-                        let (parsed_org, parsed_proj, parsed_db) = parse_database_url(url);
-                        if org.is_none() {
-                            org = parsed_org;
-                        }
-                        if project.is_none() {
-                            project = parsed_proj;
-                        }
-                        if database.is_none() {
-                            database = parsed_db;
-                        }
+                if let Some(url) = db_url {
+                    let (parsed_org, parsed_proj, parsed_db) = parse_database_url(url);
+                    if org.is_none() {
+                        org = parsed_org;
+                    }
+                    if project.is_none() {
+                        project = parsed_proj;
+                    }
+                    if database.is_none() {
+                        database = parsed_db;
                     }
                 }
+            }
         }
     }
 
