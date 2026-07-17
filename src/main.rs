@@ -630,7 +630,7 @@ fn main() {
                     "Are you sure you want to recreate branch '{}'? This will delete ALL its data and re-branch from '{}'.",
                     branch_name, from_parent
                 );
-                match prompt::prompt_confirm(&msg, false) {
+                match prompt::prompt_confirm(&msg, true) {
                     Ok(true) => {}
                     _ => {
                         eprintln!("Operation aborted.");
