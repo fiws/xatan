@@ -6,7 +6,7 @@ Developer-centric CLI helper for isolated, conflict-free Xata database branch or
 
 ## Features
 
-- **VCs-Aware Suffix Resolution:** Automatically resolves target branch suffixes from active **Git branches** or **Jujutsu (jj) bookmarks/revisions**.
+- **VCs-Aware Suffix Resolution:** Automatically resolves target branch suffixes from active **Git branches** or **Jujutsu (jj) revisions**.
 - **Collision-Free Developer Identity:** Generates unique, ASCII-safe prefixes using Git/OS metadata (includes domain for generic prefixes; hashes long domains with FNV-1a).
 - **Pure Unix Signal Passing:** Launches interactive shells via `psql`.
 

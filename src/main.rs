@@ -109,33 +109,11 @@ enum Commands {
     },
 }
 
-/// Query current active local Jujutsu bookmark/revision or Git branch
-fn get_current_vcs_branch_or_bookmark() -> Option<String> {
+/// Query current active Jujutsu revision or Git branch
+fn get_current_vcs_branch_or_revision() -> Option<String> {
     // 1. Try Jujutsu (jj) first
-    // First, check if there are any local bookmarks on `@`
-    let jj_bookmark = Command::new("jj")
-        .args([
-            "log",
-            "-r",
-            "@",
-            "-T",
-            "local_bookmarks",
-            "--no-graph",
-            "--color=never",
-        ])
-        .output();
-
-    if let Ok(output) = jj_bookmark {
-        if output.status.success() {
-            let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !s.is_empty() {
-                return Some(s);
-            }
-        }
-    }
-
-    // Otherwise, find the "branch" (the root/sprout of the branch) and use its change_id
-    let jj_branch = Command::new("jj")
+    // Find the change_id of the active revision's root (sprout from trunk)
+    let jj_revision = Command::new("jj")
         .args([
             "log",
             "-r",
@@ -147,7 +125,7 @@ fn get_current_vcs_branch_or_bookmark() -> Option<String> {
         ])
         .output();
 
-    if let Ok(output) = jj_branch {
+    if let Ok(output) = jj_revision {
         if output.status.success() {
             let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !s.is_empty() {
@@ -220,8 +198,8 @@ fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
     let suffix = if let Some(n) = name_arg {
         identity::slugify(n)
     } else {
-        let vcs_ref = get_current_vcs_branch_or_bookmark()
-            .ok_or_else(|| "Failed to query current Git branch or Jujutsu bookmark. Please specify branch name argument.".to_string())?;
+        let vcs_ref = get_current_vcs_branch_or_revision()
+            .ok_or_else(|| "Failed to query current Git branch or Jujutsu revision. Please specify branch name argument.".to_string())?;
         identity::slugify(&vcs_ref)
     };
 
