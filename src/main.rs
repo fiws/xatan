@@ -300,16 +300,30 @@ fn main() {
                     if create {
                         let parent_branch = parent.as_deref().unwrap_or(&config.fallback_parent);
                         let parent_id = resolve_parent_id(&client, parent_branch);
-                        let _ = prompt::intro("xatan url");
-                        let spinner = prompt::spinner();
-                        spinner.start(format!(
-                            "Creating branch '{}' from '{}'...",
-                            branch_name, parent_branch
-                        ));
+                        use std::io::IsTerminal;
+                        let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
+
+                        let spinner = if is_tty {
+                            let _ = prompt::intro("xatan url");
+                            let s = prompt::spinner();
+                            s.start(format!(
+                                "Creating branch '{}' from '{}'...",
+                                branch_name, parent_branch
+                            ));
+                            Some(s)
+                        } else {
+                            eprintln!(
+                                "Creating branch '{}' from '{}'...",
+                                branch_name, parent_branch
+                            );
+                            None
+                        };
 
                         match client.create_branch(&branch_name, Some(&parent_id)) {
                             Ok(created_branch) => {
-                                spinner.stop("Branch created.");
+                                if let Some(s) = &spinner {
+                                    s.stop("Branch created.");
+                                }
                                 if let Some(conn_str) = created_branch.connection_string {
                                     let rewritten =
                                         rewrite_connection_string(&conn_str, &config.database);
@@ -398,7 +412,11 @@ fn main() {
                                 }
                             }
                             Err(e) => {
-                                spinner.stop("Creation failed.");
+                                if let Some(s) = &spinner {
+                                    s.stop("Creation failed.");
+                                } else {
+                                    eprintln!("Creation failed.");
+                                }
                                 eprintln!("API Error: {}", e);
                                 std::process::exit(1);
                             }
@@ -897,6 +915,9 @@ fn run_post_create_hook(
     parent_branch: &str,
     config: &config::ResolvedConfig,
 ) -> Result<(), String> {
+    use std::io::IsTerminal;
+    let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
+
     let mut cmd = if cfg!(windows) {
         let mut c = std::process::Command::new("cmd.exe");
         c.arg("/C").arg(command_str);
@@ -915,43 +936,106 @@ fn run_post_create_hook(
         .env("XATA_PROJECT_ID", &config.project)
         .env("XATA_DATABASE_NAME", &config.database);
 
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::inherit());
+    if is_tty {
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::inherit());
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("Failed to spawn hook: {}", e))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn hook: {}", e))?;
 
-    // Forward child's stdout to stderr of the parent
-    let stdout_thread = if let Some(stdout) = child.stdout.take() {
-        Some(std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader, Write};
-            let mut reader = BufReader::new(stdout);
-            let mut line = Vec::new();
-            while let Ok(n) = reader.read_until(b'\n', &mut line) {
-                if n == 0 {
-                    break;
+        // Forward child's stdout to stderr of the parent
+        let stdout_thread = if let Some(stdout) = child.stdout.take() {
+            Some(std::thread::spawn(move || {
+                use std::io::{BufRead, BufReader, Write};
+                let mut reader = BufReader::new(stdout);
+                let mut line = Vec::new();
+                while let Ok(n) = reader.read_until(b'\n', &mut line) {
+                    if n == 0 {
+                        break;
+                    }
+                    let mut err = std::io::stderr();
+                    let _ = err.write_all(&line);
+                    let _ = err.flush();
+                    line.clear();
                 }
-                let mut err = std::io::stderr();
-                let _ = err.write_all(&line);
-                let _ = err.flush();
-                line.clear();
-            }
-        }))
+            }))
+        } else {
+            None
+        };
+
+        let status = child
+            .wait()
+            .map_err(|e| format!("Failed to wait for hook: {}", e))?;
+        if let Some(t) = stdout_thread {
+            let _ = t.join();
+        }
+
+        if !status.success() {
+            let code = status.code().unwrap_or(1);
+            return Err(format!("Hook exited with non-zero status code: {}", code));
+        }
     } else {
-        None
-    };
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
 
-    let status = child
-        .wait()
-        .map_err(|e| format!("Failed to wait for hook: {}", e))?;
-    if let Some(t) = stdout_thread {
-        let _ = t.join();
-    }
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn hook: {}", e))?;
 
-    if !status.success() {
-        let code = status.code().unwrap_or(1);
-        return Err(format!("Hook exited with non-zero status code: {}", code));
+        let stdout_handle = child.stdout.take();
+        let stderr_handle = child.stderr.take();
+
+        let stdout_thread = stdout_handle.map(|stdout| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                let mut r = stdout;
+                let _ = r.read_to_end(&mut buf);
+                buf
+            })
+        });
+
+        let stderr_thread = stderr_handle.map(|stderr| {
+            std::thread::spawn(move || {
+                use std::io::Read;
+                let mut buf = Vec::new();
+                let mut r = stderr;
+                let _ = r.read_to_end(&mut buf);
+                buf
+            })
+        });
+
+        let status = child
+            .wait()
+            .map_err(|e| format!("Failed to wait for hook: {}", e))?;
+
+        let stdout_bytes = if let Some(t) = stdout_thread {
+            t.join().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let stderr_bytes = if let Some(t) = stderr_thread {
+            t.join().unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        if !status.success() {
+            use std::io::Write;
+            let mut err = std::io::stderr();
+            if !stdout_bytes.is_empty() {
+                let _ = err.write_all(&stdout_bytes);
+            }
+            if !stderr_bytes.is_empty() {
+                let _ = err.write_all(&stderr_bytes);
+            }
+            let _ = err.flush();
+
+            let code = status.code().unwrap_or(1);
+            return Err(format!("Hook exited with non-zero status code: {}", code));
+        }
     }
 
     Ok(())
