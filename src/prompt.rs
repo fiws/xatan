@@ -68,3 +68,25 @@ pub fn update_terminal_progress(state: u8, percentage: u8) {
         let _ = io::stderr().flush();
     }
 }
+
+struct RichTheme;
+
+impl cliclack::Theme for RichTheme {
+    fn default_progress_template(&self) -> String {
+        "{msg} [{elapsed_precise}] {bar:30.#F92672/#3a3a3a} ({pos}/{len})".into()
+    }
+
+    fn default_download_template(&self) -> String {
+        "{msg} [{elapsed_precise}] [{bar:30.#F92672/#3a3a3a}] {bytes}/{total_bytes} ({eta})".into()
+    }
+
+    fn progress_chars(&self) -> String {
+        "━━".into()
+    }
+}
+
+/// Initializes the custom terminal progress bar theme.
+pub fn init_theme() {
+    cliclack::set_theme(RichTheme);
+}
+

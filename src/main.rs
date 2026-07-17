@@ -229,6 +229,7 @@ fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
 }
 
 fn main() -> std::io::Result<()> {
+    prompt::init_theme();
     let cli = Cli::parse();
 
     match cli.command {
