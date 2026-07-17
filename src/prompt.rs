@@ -89,4 +89,3 @@ impl cliclack::Theme for RichTheme {
 pub fn init_theme() {
     cliclack::set_theme(RichTheme);
 }
-
