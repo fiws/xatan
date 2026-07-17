@@ -1615,7 +1615,7 @@ mod tests {
     #[test]
     fn test_completions_subcommand_parsing() {
         use clap::Parser;
-        let cli = Cli::try_parse_from(&["xatan", "completions", "bash"]).unwrap();
+        let cli = Cli::try_parse_from(["xatan", "completions", "bash"]).unwrap();
         match cli.command {
             Commands::Completions { shell } => {
                 assert_eq!(shell, clap_complete::Shell::Bash);
