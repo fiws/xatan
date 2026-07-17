@@ -301,7 +301,8 @@ fn main() {
                         let parent_branch = parent.as_deref().unwrap_or(&config.fallback_parent);
                         let parent_id = resolve_parent_id(&client, parent_branch);
                         use std::io::IsTerminal;
-                        let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
+                        let is_tty =
+                            std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
 
                         let spinner = if is_tty {
                             let _ = prompt::intro("xatan url");
@@ -648,9 +649,9 @@ fn main() {
             let from_parent = from.as_deref().unwrap_or(&config.fallback_parent);
 
             if !yes {
-                let _ = prompt::intro("xatan recreate");
+                let _ = prompt::intro("Recreate Branch");
                 let msg = format!(
-                    "Are you sure you want to recreate branch '{}'? This will delete ALL its data and re-branch from '{}'.",
+                    "Recreate branch '{}'? This will delete ALL its data and re-branch from '{}'.",
                     branch_name, from_parent
                 );
                 match prompt::prompt_confirm(&msg, true) {
@@ -740,11 +741,8 @@ fn main() {
             };
 
             if !yes {
-                let _ = prompt::intro("xatan delete");
-                let msg = format!(
-                    "Are you sure you want to permanently delete branch '{}'?",
-                    branch_name
-                );
+                let _ = prompt::intro("Delete Branch");
+                let msg = format!("Permanently delete branch '{}'?", branch_name);
                 match prompt::prompt_confirm(&msg, false) {
                     Ok(true) => {}
                     _ => {
@@ -903,7 +901,7 @@ fn rewrite_connection_string(conn_str: &str, db_name: &str) -> String {
             return format!("{}{}/{}{}", scheme, host_part, db_name, query_part);
         }
     }
-conn_str.to_string()
+    conn_str.to_string()
 }
 
 #[cfg(test)]
@@ -923,7 +921,9 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 fn parse_host_port(connection_url: &str) -> Option<(String, u16)> {
     let scheme_idx = connection_url.find("://")?;
     let rest = &connection_url[scheme_idx + 3..];
-    let end_idx = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
+    let end_idx = rest
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
     let host_and_auth = &rest[..end_idx];
 
     let host_port = if let Some(at_idx) = host_and_auth.find('@') {
@@ -1274,10 +1274,7 @@ mod tests {
             parse_host_port("postgres://some-host:1234?sslmode=require"),
             Some(("some-host".to_string(), 1234))
         );
-        assert_eq!(
-            parse_host_port("invalid-url"),
-            None
-        );
+        assert_eq!(parse_host_port("invalid-url"), None);
     }
 
     #[test]
@@ -1317,13 +1314,7 @@ mod tests {
             api_key: "test-key".to_string(),
             post_create: None,
         };
-        let res = run_post_create_hook(
-            command,
-            &conn_url,
-            "test-branch",
-            "main",
-            &config,
-        );
+        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config);
         assert!(res.is_ok());
     }
 
@@ -1342,13 +1333,7 @@ mod tests {
             api_key: "test-key".to_string(),
             post_create: None,
         };
-        let res = run_post_create_hook(
-            command,
-            &conn_url,
-            "test-branch",
-            "main",
-            &config,
-        );
+        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config);
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert!(err.contains("42"));
