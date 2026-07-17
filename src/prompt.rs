@@ -47,3 +47,24 @@ pub fn prompt_confirm(message: &str, default: bool) -> Result<bool, String> {
 pub fn spinner() -> cliclack::ProgressBar {
     cliclack::spinner()
 }
+
+/// Creates and returns a Cliclack ProgressBar with a given total.
+pub fn progress_bar(total: usize) -> cliclack::ProgressBar {
+    cliclack::progress_bar(total as u64)
+}
+
+/// Updates the terminal/OS progress integration (OSC 9;4) on stderr.
+/// State:
+/// * 0: Reset/Clear
+/// * 1: Normal progress
+/// * 2: Error
+/// * 3: Indeterminate
+/// * 4: Paused
+pub fn update_terminal_progress(state: u8, percentage: u8) {
+    use std::io::IsTerminal;
+    use std::io::Write;
+    if io::stderr().is_terminal() {
+        let _ = write!(io::stderr(), "\x1b]9;4;{};{}\x1b\\", state, percentage);
+        let _ = io::stderr().flush();
+    }
+}

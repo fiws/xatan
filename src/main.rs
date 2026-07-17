@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use cliclack::log;
 use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -221,13 +222,13 @@ fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
     }
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Init => {
             if let Err(e) = run_init() {
-                eprintln!("Error: {}", e);
+                log::error(&e)?;
                 std::process::exit(1);
             }
         }
@@ -237,7 +238,7 @@ fn main() {
                 std::process::exit(0);
             }
             Err(e) => {
-                eprintln!("Error: {}", e);
+                log::error(&e)?;
                 std::process::exit(1);
             }
         },
@@ -253,7 +254,7 @@ fn main() {
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -274,10 +275,10 @@ fn main() {
                         println!("{}", rewritten);
                         std::process::exit(0);
                     } else {
-                        eprintln!(
-                            "Error: Branch '{}' exists but has no connection URL.",
+                        log::error(format!(
+                            "Branch '{}' exists but has no connection URL.",
                             branch_name
-                        );
+                        ))?;
                         std::process::exit(1);
                     }
                 }
@@ -298,10 +299,10 @@ fn main() {
                             ));
                             Some(s)
                         } else {
-                            eprintln!(
+                            log::info(format!(
                                 "Creating branch '{}' from '{}'...",
                                 branch_name, parent_branch
-                            );
+                            ))?;
                             None
                         };
 
@@ -322,7 +323,10 @@ fn main() {
                                             .clone()
                                             .or_else(find_convention_hook_file)
                                     {
-                                        eprintln!("Running post-creation hook: {}", command);
+                                        log::info(format!(
+                                            "Running post-creation hook: {}",
+                                            command
+                                        ))?;
                                         if let Err(e) = run_post_create_hook(
                                             command,
                                             &rewritten,
@@ -330,7 +334,10 @@ fn main() {
                                             parent_branch,
                                             &config,
                                         ) {
-                                            eprintln!("Error executing post-creation hook: {}", e);
+                                            log::error(format!(
+                                                "Error executing post-creation hook: {}",
+                                                e
+                                            ))?;
                                             std::process::exit(1);
                                         }
                                     }
@@ -355,10 +362,10 @@ fn main() {
                                                         .clone()
                                                         .or_else(find_convention_hook_file)
                                                 {
-                                                    eprintln!(
+                                                    log::info(format!(
                                                         "Running post-creation hook: {}",
                                                         command
-                                                    );
+                                                    ))?;
                                                     if let Err(e) = run_post_create_hook(
                                                         command,
                                                         &rewritten,
@@ -366,10 +373,10 @@ fn main() {
                                                         parent_branch,
                                                         &config,
                                                     ) {
-                                                        eprintln!(
+                                                        log::error(format!(
                                                             "Error executing post-creation hook: {}",
                                                             e
-                                                        );
+                                                        ))?;
                                                         std::process::exit(1);
                                                     }
                                                 }
@@ -377,16 +384,16 @@ fn main() {
                                                 println!("{}", rewritten);
                                                 std::process::exit(0);
                                             } else {
-                                                eprintln!(
-                                                    "Error: Branch created, but connection URL is not available."
-                                                );
+                                                log::error(
+                                                    "Branch created, but connection URL is not available.",
+                                                )?;
                                                 std::process::exit(1);
                                             }
                                         }
                                         _ => {
-                                            eprintln!(
-                                                "Error: Created branch but failed to retrieve credentials."
-                                            );
+                                            log::error(
+                                                "Created branch but failed to retrieve credentials.",
+                                            )?;
                                             std::process::exit(1);
                                         }
                                     }
@@ -396,21 +403,21 @@ fn main() {
                                 if let Some(s) = &spinner {
                                     s.stop("Creation failed.");
                                 } else {
-                                    eprintln!("Creation failed.");
+                                    log::error("Creation failed.")?;
                                 }
-                                eprintln!("API Error: {}", e);
+                                log::error(format!("API Error: {}", e))?;
                                 std::process::exit(1);
                             }
                         }
                     } else {
-                        eprintln!(
-                            "Error: Branch '{}' does not exist. Omit --no-create to create it dynamically.",
+                        log::error(format!(
+                            "Branch '{}' does not exist. Omit --no-create to create it dynamically.",
                             branch_name
-                        );
+                        ))?;
                     }
                 }
                 Err(e) => {
-                    eprintln!("API Error: {}", e);
+                    log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
             }
@@ -424,7 +431,7 @@ fn main() {
             let branch_name = match resolve_target_branch(Some(&name)) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -432,7 +439,7 @@ fn main() {
             let client = xata::XataClient::new(&config);
             match client.get_branch(&branch_name) {
                 Ok(Some(_)) => {
-                    eprintln!("Warning: Branch '{}' already exists.", branch_name);
+                    log::warning(format!("Branch '{}' already exists.", branch_name))?;
                     println!("{}", branch_name);
                     std::process::exit(0);
                 }
@@ -468,7 +475,7 @@ fn main() {
                                 if let Some(conn_str) = conn_url {
                                     let rewritten =
                                         rewrite_connection_string(&conn_str, &config.database);
-                                    eprintln!("Running post-creation hook: {}", command);
+                                    log::info(format!("Running post-creation hook: {}", command))?;
                                     if let Err(e) = run_post_create_hook(
                                         command,
                                         &rewritten,
@@ -476,15 +483,18 @@ fn main() {
                                         parent_branch,
                                         &config,
                                     ) {
-                                        eprintln!("Error executing post-creation hook: {}", e);
+                                        log::error(format!(
+                                            "Error executing post-creation hook: {}",
+                                            e
+                                        ))?;
                                         std::process::exit(1);
                                     }
                                 } else if config.post_create.is_some()
                                     || find_convention_hook_file().is_some()
                                 {
-                                    eprintln!(
-                                        "Warning: Skipping post-creation hook because database connection URL could not be retrieved."
-                                    );
+                                    log::warning(
+                                        "Skipping post-creation hook because database connection URL could not be retrieved.",
+                                    )?;
                                 }
                             }
 
@@ -493,13 +503,13 @@ fn main() {
                         }
                         Err(e) => {
                             spinner.stop("Creation failed.");
-                            eprintln!("API Error: {}", e);
+                            log::error(format!("API Error: {}", e))?;
                             std::process::exit(1);
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("API Error: {}", e);
+                    log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
             }
@@ -509,7 +519,7 @@ fn main() {
             let prefix = match identity::resolve_identity() {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -518,7 +528,7 @@ fn main() {
             let mut branches = match client.list_branches() {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("API Error: {}", e);
+                    log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
             };
@@ -618,7 +628,7 @@ fn main() {
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -634,7 +644,7 @@ fn main() {
                 match prompt::prompt_confirm(&msg, true) {
                     Ok(true) => {}
                     _ => {
-                        eprintln!("Operation aborted.");
+                        log::error("Operation aborted.")?;
                         std::process::exit(1);
                     }
                 }
@@ -651,7 +661,7 @@ fn main() {
                 && !e.to_lowercase().contains("not found")
             {
                 spinner.stop("Teardown failed.");
-                eprintln!("API Error: {}", e);
+                log::error(format!("API Error: {}", e))?;
                 std::process::exit(1);
             }
 
@@ -676,7 +686,7 @@ fn main() {
                                 .clone()
                                 .or_else(find_convention_hook_file)
                         {
-                            eprintln!("Running post-creation hook: {}", command);
+                            log::info(format!("Running post-creation hook: {}", command))?;
                             if let Err(e) = run_post_create_hook(
                                 command,
                                 &rewritten,
@@ -684,22 +694,22 @@ fn main() {
                                 from_parent,
                                 &config,
                             ) {
-                                eprintln!("Error executing post-creation hook: {}", e);
+                                log::error(format!("Error executing post-creation hook: {}", e))?;
                                 std::process::exit(1);
                             }
                         }
                     } else if !skip_post_create
                         && (config.post_create.is_some() || find_convention_hook_file().is_some())
                     {
-                        eprintln!(
-                            "Warning: Skipping post-creation hook because database connection URL could not be retrieved."
-                        );
+                        log::warning(
+                            "Skipping post-creation hook because database connection URL could not be retrieved.",
+                        )?;
                     }
                     std::process::exit(0);
                 }
                 Err(e) => {
                     spinner.stop("Cloning failed.");
-                    eprintln!("API Error: {}", e);
+                    log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
             }
@@ -709,7 +719,7 @@ fn main() {
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -720,7 +730,7 @@ fn main() {
                 match prompt::prompt_confirm(&msg, false) {
                     Ok(true) => {}
                     _ => {
-                        eprintln!("Operation aborted.");
+                        log::error("Operation aborted.")?;
                         std::process::exit(1);
                     }
                 }
@@ -738,7 +748,7 @@ fn main() {
                 }
                 Err(e) => {
                     spinner.stop("Deletion failed.");
-                    eprintln!("API Error: {}", e);
+                    log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
             }
@@ -748,7 +758,7 @@ fn main() {
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -756,7 +766,7 @@ fn main() {
             // Check cache first for sub-millisecond psql startup
             if let Some(cached_url) = cache::get_cached_url(&branch_name) {
                 let err = Command::new("psql").arg(cached_url).exec();
-                eprintln!("Failed to execute psql: {}", err);
+                log::error(format!("Failed to execute psql: {}", err))?;
                 std::process::exit(1);
             }
 
@@ -768,22 +778,22 @@ fn main() {
                         // Save to cache
                         cache::set_cached_url(&branch_name, &rewritten);
                         let err = Command::new("psql").arg(rewritten).exec();
-                        eprintln!("Failed to execute psql: {}", err);
+                        log::error(format!("Failed to execute psql: {}", err))?;
                         std::process::exit(1);
                     } else {
-                        eprintln!(
-                            "Error: Branch '{}' exists but has no connection URL.",
+                        log::error(format!(
+                            "Branch '{}' exists but has no connection URL.",
                             branch_name
-                        );
+                        ))?;
                         std::process::exit(1);
                     }
                 }
                 Ok(None) => {
-                    eprintln!("Error: Branch '{}' does not exist.", branch_name);
+                    log::error(format!("Branch '{}' does not exist.", branch_name))?;
                     std::process::exit(2);
                 }
                 Err(e) => {
-                    eprintln!("API Error: {}", e);
+                    log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
             }
@@ -793,7 +803,7 @@ fn main() {
             let prefix = match identity::resolve_identity() {
                 Ok(p) => p,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -801,7 +811,7 @@ fn main() {
             let local_equivalents = match get_local_equivalents() {
                 Ok(eqs) => eqs,
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    log::error(&e)?;
                     std::process::exit(1);
                 }
             };
@@ -810,7 +820,7 @@ fn main() {
             let branches = match client.list_branches() {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("API Error: {}", e);
+                    log::error(format!("API Error: {}", e))?;
                     std::process::exit(1);
                 }
             };
@@ -833,51 +843,107 @@ fn main() {
             }
 
             if to_prune.is_empty() {
-                eprintln!("No branches to prune.");
+                log::info("No branches to prune.")?;
                 std::process::exit(0);
             }
 
             if !yes {
-                let _ = prompt::intro("Prune Branches");
-                eprintln!("The following remote branches do not exist in your local VCS:");
-                for b in &to_prune {
-                    eprintln!("  - {}", b);
-                }
+                let branches_list = to_prune
+                    .iter()
+                    .map(|b| format!("- {}", b))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                cliclack::note(
+                    "The following remote branches do not exist in your local VCS",
+                    branches_list,
+                )?;
                 let msg = format!("Permanently delete these {} branches?", to_prune.len());
                 match prompt::prompt_confirm(&msg, false) {
                     Ok(true) => {}
                     _ => {
-                        eprintln!("Operation aborted.");
+                        log::error("Operation aborted.")?;
                         std::process::exit(1);
                     }
                 }
             }
 
-            let spinner = prompt::spinner();
-            spinner.start("Pruning branches...");
-            let mut deleted_count = 0;
-            for b in &to_prune {
-                spinner.set_message(format!("Deleting branch '{}'...", b));
-                match client.delete_branch(b) {
-                    Ok(_) => {
-                        cache::remove_cached_url(b);
-                        deleted_count += 1;
-                    }
-                    Err(e) => {
-                        if e.contains("404") || e.to_lowercase().contains("not found") {
-                            cache::remove_cached_url(b);
-                            deleted_count += 1;
-                        } else {
-                            spinner.stop("Pruning paused due to error.");
-                            eprintln!("API Error deleting branch '{}': {}", b, e);
-                            std::process::exit(1);
+            let pb = std::sync::Arc::new(prompt::progress_bar(to_prune.len()));
+            pb.start("Pruning branches...");
+            prompt::update_terminal_progress(1, 0);
+
+            let completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let total_branches = to_prune.len();
+            let client = std::sync::Arc::new(client);
+            let mut handles = Vec::new();
+
+            for b in to_prune {
+                let client_clone = std::sync::Arc::clone(&client);
+                let pb_clone = std::sync::Arc::clone(&pb);
+                let completed_clone = std::sync::Arc::clone(&completed);
+                let handle = std::thread::spawn(move || {
+                    pb_clone.set_message(format!("Deleting branch '{}'...", b));
+                    let res = client_clone.delete_branch(&b);
+                    pb_clone.inc(1);
+
+                    let current =
+                        completed_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    let pct = ((current * 100) / total_branches) as u8;
+                    prompt::update_terminal_progress(1, pct);
+
+                    match res {
+                        Ok(_) => Ok(b),
+                        Err(e) => {
+                            if e.contains("404") || e.to_lowercase().contains("not found") {
+                                Ok(b)
+                            } else {
+                                Err((b, e))
+                            }
                         }
+                    }
+                });
+                handles.push(handle);
+            }
+
+            let mut deleted_branches = Vec::new();
+            let mut errors = Vec::new();
+
+            for handle in handles {
+                match handle.join() {
+                    Ok(Ok(b)) => {
+                        deleted_branches.push(b);
+                    }
+                    Ok(Err((b, e))) => {
+                        errors.push((b, e));
+                    }
+                    Err(_) => {
+                        errors.push(("unknown".to_string(), "Thread panicked".to_string()));
                     }
                 }
             }
-            spinner.stop(format!("Successfully pruned {} branches.", deleted_count));
+
+            for b in &deleted_branches {
+                cache::remove_cached_url(b);
+            }
+
+            if !errors.is_empty() {
+                let completed_val = completed.load(std::sync::atomic::Ordering::SeqCst);
+                let pct = ((completed_val * 100) / total_branches) as u8;
+                prompt::update_terminal_progress(2, pct);
+                pb.stop("Pruning paused due to error.");
+                for (b, e) in errors {
+                    log::error(format!("API Error deleting branch '{}': {}", b, e))?;
+                }
+                std::process::exit(1);
+            }
+
+            prompt::update_terminal_progress(0, 0);
+            pb.stop(format!(
+                "Successfully pruned {} branches.",
+                deleted_branches.len()
+            ));
         }
     }
+    Ok(())
 }
 
 /// Helper to resolve configurations, exiting with exit code 3 on failure
@@ -885,7 +951,7 @@ fn resolve_or_exit() -> config::ResolvedConfig {
     match config::resolve_config() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Authentication / Config Missing: {}", e);
+            let _ = log::error(format!("Authentication / Config Missing: {}", e));
             std::process::exit(3);
         }
     }
