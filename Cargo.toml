@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 chrono = { version = "0.4.39", features = ["clock"] }
 clap = { version = "4.6.1", features = ["derive", "env"] }
+clap_complete = "4.5"
 cliclack = "0.5.5"
 dirs = "5.0.1"
 serde = { version = "1.0.228", features = ["derive"] }

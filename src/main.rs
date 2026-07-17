@@ -115,6 +115,12 @@ enum Commands {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Generate shell autocompletions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 /// Query current active Jujutsu revision or Git branch
@@ -599,7 +605,9 @@ fn main() -> std::io::Result<()> {
             );
             println!(
                 "│ {:<width_name$} │ {:<width_parent$} │ {:<width_created$} │",
-                "Branch Name", "Parent", "Created At",
+                "Branch Name",
+                "Parent",
+                "Created At",
                 width_name = width_name,
                 width_parent = width_parent,
                 width_created = width_created
@@ -970,6 +978,13 @@ fn main() -> std::io::Result<()> {
                 "Successfully pruned {} branches.",
                 deleted_branches.len()
             ));
+        }
+        Commands::Completions { shell } => {
+            use clap::CommandFactory;
+            let mut cmd = Cli::command();
+            let name = cmd.get_name().to_string();
+            clap_complete::generate(shell, &mut cmd, name, &mut std::io::stdout());
+            std::process::exit(0);
         }
     }
     Ok(())
@@ -1594,6 +1609,18 @@ mod tests {
                 eqs,
                 slugified
             );
+        }
+    }
+
+    #[test]
+    fn test_completions_subcommand_parsing() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(&["xatan", "completions", "bash"]).unwrap();
+        match cli.command {
+            Commands::Completions { shell } => {
+                assert_eq!(shell, clap_complete::Shell::Bash);
+            }
+            _ => panic!("Expected Completions variant"),
         }
     }
 }
