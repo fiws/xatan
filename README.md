@@ -48,6 +48,7 @@ XATA_DATABASE_NAME="your-db"
 - **`recreate [NAME] [--from <BRANCH>] [-y]`**: Re-clone schema and data from a parent.
 - **`delete [NAME] [-y]`**: Delete a branch safely.
 - **`shell [NAME]`**: Open an interactive `psql` connection.
+- **`prune [-y]`**: Delete all developer branches that do not have an equivalent in the local VCS (Git or Jujutsu) anymore.
 
 ---
 

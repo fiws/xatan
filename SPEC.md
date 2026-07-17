@@ -351,6 +351,34 @@ Launches an interactive `psql` connection or console targeting the resolved bran
 
 ---
 
+### 4.9. `prune`
+Deletes all remote database branches that do not have an equivalent in the local VCS anymore.
+
+```text
+xatan-prune 
+Prune remote database branches without local VCS counterparts
+
+USAGE:
+    xatan prune [OPTIONS]
+
+OPTIONS:
+    -y, --yes    Bypass safety confirmation prompt
+```
+
+* **Behavior:**
+  1. Determine developer prefix.
+  2. Query local VCS repositories (Git and/or Jujutsu) to build a set of all active local branch names, bookmark names, and change IDs. All retrieved names are normalized and slugified.
+  3. Query Xata API to retrieve all remote branches in the active project.
+  4. Filter the remote branches to only consider the current developer's branches (prefixed with `<prefix>-` or exactly `<prefix>`).
+  5. For each developer branch, resolve its suffix. If the slugified suffix is not in the set of local VCS equivalents, the branch is marked for pruning.
+  6. Prompt for confirmation on `stderr` listing all branches to be pruned, unless `-y`/`--yes` is supplied.
+  7. Call Xata API to delete each of the identified branches, and evict them from the local connection URL cache.
+* **Exit Codes:**
+  * `0`: Success (branches pruned or no branches to prune).
+  * `1`: Pruning failed or was aborted.
+
+---
+
 ## 5. Exit Code & Stream Matrix
 
 | Outcome | Exit Code | Stdout Content | Stderr Content |
