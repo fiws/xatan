@@ -1,124 +1,87 @@
 # xatan
 
-Developer-centric CLI helper for isolated, conflict-free Xata database branch orchestration.
+A fast, developer-friendly CLI helper for managing isolated, conflict-free Xata database branches.
+
+Instead of manual branch naming and configuration, `xatan` maps your database branches to your local Git branch or Jujutsu (jj) revision, automatically prefixing them with your developer identity to keep everyone's sandboxes isolated.
+
+## Installation
+
+The recommended way to install `xatan` is with [mise](https://mise.jdx.dev):
+
+```bash
+mise use github:fiws/xatan
+```
+
+Alternatively, you can build from source:
+
+```bash
+cargo install --git https://github.com/fiws/xatan
+```
 
 ---
 
-## Features
+## Setup & Configuration
 
-- **VCs-Aware Suffix Resolution:** Automatically resolves target branch suffixes from active **Git branches** or **Jujutsu (jj) revisions**.
-- **Collision-Free Developer Identity:** Generates unique, ASCII-safe prefixes using Git/OS metadata (includes domain for generic prefixes; hashes long domains with FNV-1a).
-- **Pure Unix Signal Passing:** Launches interactive shells via `psql`.
-
----
-
-## Quickstart
-
-### 1. Build
+Configure `xatan` via environment variables (ideal for CI/CD or `.env` files):
 
 ```bash
-cargo build --release
+export XATA_API_KEY="xau_..."
+export XATA_ORG_ID="your-org"
+export XATA_PROJECT_ID="your-project-id"
+export XATA_DATABASE_NAME="your-db"
 ```
 
-### 2. Configure (Optional)
-
-Generate a local `.xatanrc` configuration file at your repository root:
+If you prefer a file-based configuration, run:
 
 ```bash
-target/release/xatan init
+xatan init
 ```
 
-Or configure dynamically via environment variables in your shell (or `.env`):
-
-```bash
-XATA_API_KEY="xau_..."
-XATA_ORG_ID="your-org"
-XATA_PROJECT_ID="your-project-id"
-XATA_DATABASE_NAME="your-db"
-```
+This will walk you through a quick interactive setup and write a `.xatanrc` to your repository root.
 
 ---
 
 ## Commands
 
-- **`whoami`**: Print your unique developer identity prefix (e.g., `me-fiws-net`).
-- **`url [NAME] [--no-create]`**: Print the Postgres connection string for a branch. Auto-creates it if it does not exist (unless `--no-create` is passed).
-- **`create <NAME> [--parent <BRANCH>]`**: Create an isolated branch cloned from a parent.
-- **`list [--mine] [--all]`**: List database branches, showing only your own by default.
-- **`recreate [NAME] [--from <BRANCH>] [-y]`**: Re-clone schema and data from a parent.
-- **`delete [NAME] [-y]`**: Delete a branch safely.
-- **`shell [NAME]`**: Open an interactive `psql` connection.
-- **`prune [-y]`**: Delete all developer branches that do not have an equivalent in the local VCS (Git or Jujutsu) anymore.
+- **`whoami`**: Prints your resolved developer identity prefix (e.g., `jane-doe`).
+- **`url [NAME]`**: Prints the Postgres connection URL for your branch. If the branch doesn't exist, `xatan` automatically creates it first. Pass `--no-create` to skip auto-creation.
+- **`create <NAME>`**: Creates an isolated database branch prefixed with your identity.
+- **`recreate [NAME]`**: Tears down and re-clones your branch from a parent (defaults to `main`), resetting your test data state.
+- **`delete [NAME]`**: Deletes your developer branch safely.
+- **`list`**: Lists database branches. Shows only your own by default. Use `--all` to view other developers' branches.
+- **`shell [NAME]`**: Launches an interactive `psql` connection targeting your branch, with full Unix signal forwarding.
+- **`prune`**: Automatically identifies and deletes remote database branches that no longer have a local Git branch or Jujutsu revision equivalent.
 
 ---
 
-## Post-Creation Database Hooks
+## Automated Post-Creation Hooks
 
-`xatan` supports executing automated post-creation database modification scripts (e.g., seeding, migrations, or database initialization) immediately after a new database branch is dynamically created (via `url` or `create`) or recreated (via `recreate`).
+Whenever `xatan` creates (or recreates) a branch, it can automatically run a script to seed your database or run migrations.
 
-### 1. Explicit Configuration
+### How it works:
 
-Configure your post-creation script command directly in your local `.xatanrc` configuration file:
+1. **Zero-Config Convention**: If an executable or script is found at `.xata/post-create` (or with common extensions like `.sh`, `.bat`, `.ps1`), `xatan` will automatically run it.
+2. **Explicit Hook**: You can specify a custom command in your `.xatanrc` (`"postCreate": "npm run db:seed"`) or via the `XATAN_POST_CREATE` environment variable.
 
-```json
-{
-  "org": "your-org",
-  "project": "your-project",
-  "database": "your-db",
-  "postCreate": "npm run db:seed"
-}
-```
+The hook script executes with the following environment variables automatically injected:
 
-Or dynamically via the `XATAN_POST_CREATE` environment variable:
+- `DATABASE_URL` (the connection string for the newly created branch)
+- `XATAN_BRANCH_NAME` (the resolved branch name)
+- `XATAN_PARENT_BRANCH` (the parent branch name, e.g., `main`)
 
-```bash
-export XATAN_POST_CREATE="python run_migrations.py && python seed_admin.py"
-```
+_Note: The script's stdout is redirected to `stderr` of the parent `xatan` process. This keeps logs visible in your terminal but avoids polluting standard output, ensuring dynamic evaluation chains like `DATABASE_URL=$(xatan url)` continue working perfectly._
 
-### 2. Zero-Config Convention-Based Hooks
-
-If no explicit hook is configured, `xatan` will automatically look for and run an executable or script located in the `.xata/` directory at the root of your repository (e.g., `.xata/post-create`).
-
-Supported convention file names:
-* **Unix-like (macOS/Linux):** `.xata/post-create`, `.xata/post-create.sh`, or `.xata/post-create.bash` (Ensure the file is executable: `chmod +x .xata/post-create`)
-* **Windows:** `.xata/post-create.bat`, `.xata/post-create.cmd`, `.xata/post-create.ps1`, `.xata/post-create.sh`, or `.xata/post-create`
-
-### 3. Injected Environment Variables
-
-The post-creation script subprocess runs with the following automatically injected environment variables, allowing your seeders/migration tools to connect to the newly created branch instantly:
-
-* `DATABASE_URL` / `XATA_DATABASE_URL`: The fully qualified and rewritten connection string for the new isolated branch.
-* `XATAN_BRANCH_NAME`: The resolved name of the new branch (e.g., `jane-doe-feature-login`).
-* `XATAN_PARENT_BRANCH`: The parent branch that this new branch was cloned from (e.g., `main`).
-* `XATA_ORG_ID`: The resolved Xata organization ID.
-* `XATA_PROJECT_ID`: The resolved Xata project ID.
-* `XATA_DATABASE_NAME`: The resolved default database name.
-
-### 4. Direct Stream Separation & Piping
-
-The stdout of the hook subprocess is automatically captured and redirected to standard error (`stderr`) of the `xatan` parent process. This guarantees that your hook's console output is safely visible in your terminal, while strictly preserving clean `stdout` separation so dynamic evaluation chains like `DATABASE_URL=$(xatan url)` work without pollution.
-
-### 5. Bypassing the Hook
-
-To temporarily bypass the post-creation hook for a specific command run, pass the `--skip-post-create` flag:
-
-```bash
-xatan url --skip-post-create
-xatan create feature-branch --skip-post-create
-xatan recreate --skip-post-create
-```
+To temporarily bypass hooks, pass `--skip-post-create` to `url`, `create`, or `recreate`.
 
 ---
 
 ## Integration with mise
 
-[mise](https://mise.jdx.dev) is a fast environment and tool manager. You can integrate `xatan` into your `mise.toml` to automate your local development database environment.
+Integrating `xatan` with `mise` gives you a completely automated local development environment.
 
-### 1. Auto-Inject Dynamic `DATABASE_URL`
+### Auto-inject dynamic `DATABASE_URL`
 
-Configure `mise` to dynamically resolve (and auto-create) your isolated developer branch and inject its connection string directly into your environment on directory entry.
-
-Because `xatan` automatically and natively caches connection URLs locally (with sub-millisecond retrievals and zero network overhead), you can use a simple, clean, dynamic assignment:
+Configure `mise` to dynamically resolve your isolated developer branch and inject its connection string on directory entry. Because `xatan` caches URLs locally, this is virtually instantaneous:
 
 ```toml
 # mise.toml
@@ -126,38 +89,18 @@ Because `xatan` automatically and natively caches connection URLs locally (with 
 DATABASE_URL = "{{ exec(command='xatan url') }}"
 ```
 
-Now, any application or ORM (like Prisma, Drizzle, or `psql`) in this directory can automatically connect to your isolated developer branch with zero manual steps!
+Now, any tool, framework, or ORM (like Prisma, Drizzle, or `psql`) automatically targets your isolated sandbox with zero manual setup.
 
-### 2. Configure Credentials Securely
-
-Keep your private API keys in `mise.local.toml` (which is gitignored) and project settings in `mise.toml`:
-
-```toml
-# mise.toml
-[env]
-XATA_ORG_ID = "your-org"
-XATA_PROJECT_ID = "your-project-id"
-XATA_DATABASE_NAME = "your-db"
-```
-
-```toml
-# mise.local.toml
-[env]
-XATA_API_KEY = "xau_yourprivatekey..."
-```
-
-### 3. Define Convenient Tasks
-
-Optionally, set up mise tasks to quickly interact with your database:
+### Define convenient tasks
 
 ```toml
 # mise.toml
 [tasks."db:shell"]
-description = "Launch psql shell targeting your isolated branch"
+description = "Open a psql shell to your isolated branch"
 run = "xatan shell"
 
 [tasks."db:recreate"]
-description = "Recreate your branch schema & data from main"
+description = "Reset your database branch and seed it from main"
 run = "xatan recreate -y"
 ```
 
@@ -165,7 +108,9 @@ run = "xatan recreate -y"
 
 ## Exit Codes
 
-- `0`: Success.
-- `1`: Failure / Aborted Prompt / System or Network Error.
-- `2`: Target Branch Missing (e.g., calling `url` with `--no-create`).
-- `3`: Authentication / Config Missing (e.g., empty required environment variables).
+If you are scripting `xatan`, you can rely on these exit codes:
+
+- `0` — Success
+- `1` — Failure, aborted prompt, or general system/network error
+- `2` — Branch not found (e.g. calling `url` with `--no-create`)
+- `3` — Missing credentials or required configuration
