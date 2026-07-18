@@ -50,9 +50,7 @@ This will walk you through a quick interactive setup and write a `.xatanrc` to y
 
 ## Automated Post-Creation Hooks
 
-Whenever `xatan` creates (or recreates) a branch, it can automatically run a script to seed your database or run migrations.
-
-### How it works:
+Whenever `xatan` creates (or recreates) a branch, it can automatically run a script to seed your database or run migrations. You have two options here:
 
 1. **Zero-Config**: If an executable or script is found at `.xata/post-create` (or with common extensions like `.sh`, `.bat`, `.ps1`), `xatan` will automatically run it.
 2. **Explicit Command**: Alternatively, you can specify a custom command in your `.xatanrc` (`"postCreate": "npm run db:seed"`) or via the `XATAN_POST_CREATE` environment variable.
