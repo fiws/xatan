@@ -1,8 +1,8 @@
 # xatan
 
-A fast, developer-friendly CLI helper for managing isolated, conflict-free Xata database branches.
+A CLI written in rust that gives you a branched [Xata](https://xata.io) database for any git branch.
 
-Instead of manual branch naming and configuration, `xatan` maps your database branches to your local Git branch or Jujutsu (jj) revision, automatically prefixing them with your developer identity to keep everyone's sandboxes isolated.
+Basically, instead of manual branch naming and configuration, `xatan` maps your database branches to your local Git branch or Jujutsu (jj) revision, while also automatically prefixing them with your developer identity to keep everyone's branches in your team isolated.
 
 ## Installation
 
@@ -17,8 +17,6 @@ Alternatively, you can build from source:
 ```bash
 cargo install --git https://github.com/fiws/xatan
 ```
-
----
 
 ## Setup & Configuration
 
@@ -39,8 +37,6 @@ xatan init
 
 This will walk you through a quick interactive setup and write a `.xatanrc` to your repository root.
 
----
-
 ## Commands
 
 - **`whoami`**: Prints your resolved developer identity prefix (e.g., `jane-doe`).
@@ -52,16 +48,14 @@ This will walk you through a quick interactive setup and write a `.xatanrc` to y
 - **`shell [NAME]`**: Launches an interactive `psql` connection targeting your branch, with full Unix signal forwarding.
 - **`prune`**: Automatically identifies and deletes remote database branches that no longer have a local Git branch or Jujutsu revision equivalent.
 
----
-
 ## Automated Post-Creation Hooks
 
 Whenever `xatan` creates (or recreates) a branch, it can automatically run a script to seed your database or run migrations.
 
 ### How it works:
 
-1. **Zero-Config Convention**: If an executable or script is found at `.xata/post-create` (or with common extensions like `.sh`, `.bat`, `.ps1`), `xatan` will automatically run it.
-2. **Explicit Hook**: You can specify a custom command in your `.xatanrc` (`"postCreate": "npm run db:seed"`) or via the `XATAN_POST_CREATE` environment variable.
+1. **Zero-Config**: If an executable or script is found at `.xata/post-create` (or with common extensions like `.sh`, `.bat`, `.ps1`), `xatan` will automatically run it.
+2. **Explicit Command**: Alternatively, you can specify a custom command in your `.xatanrc` (`"postCreate": "npm run db:seed"`) or via the `XATAN_POST_CREATE` environment variable.
 
 The hook script executes with the following environment variables automatically injected:
 
@@ -72,8 +66,6 @@ The hook script executes with the following environment variables automatically 
 _Note: The script's stdout is redirected to `stderr` of the parent `xatan` process. This keeps logs visible in your terminal but avoids polluting standard output, ensuring dynamic evaluation chains like `DATABASE_URL=$(xatan url)` continue working perfectly._
 
 To temporarily bypass hooks, pass `--skip-post-create` to `url`, `create`, or `recreate`.
-
----
 
 ## Integration with mise
 
@@ -103,8 +95,6 @@ run = "xatan shell"
 description = "Reset your database branch and seed it from main"
 run = "xatan recreate -y"
 ```
-
----
 
 ## Exit Codes
 
