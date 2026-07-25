@@ -4,6 +4,11 @@ A CLI written in rust that gives you a branched [Xata](https://xata.io) database
 
 Basically, instead of manual branch naming and configuration, `xatan` maps your database branches to your local Git branch or Jujutsu (jj) revision, while also automatically prefixing them with your developer identity to keep everyone's branches in your team isolated.
 
+```mermaid
+flowchart LR
+    A["Switch Branch<br/>(e.g. feat/login)"] -->|xatan magic| B[("Branch-Specific Database<br/>(e.g. alice:feat-login)")]
+```
+
 ## Installation
 
 The recommended way to install `xatan` is with [mise](https://mise.jdx.dev):
