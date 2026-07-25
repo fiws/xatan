@@ -11,6 +11,36 @@ pub struct XatanConfig {
     pub post_create: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigError {
+    #[error("Failed to read current directory: {0}")]
+    CurrentDir(#[from] std::io::Error),
+
+    #[error("Failed to read config file {path}: {source}", path = .path.display())]
+    ReadFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("Failed to parse config file {path}: {source}", path = .path.display())]
+    ParseFile {
+        path: PathBuf,
+        source: serde_json::Error,
+    },
+
+    #[error("XATA_API_KEY environment variable is missing or empty")]
+    MissingApiKey,
+
+    #[error("Organization ID (org) could not be resolved")]
+    MissingOrg,
+
+    #[error("Project ID (project) could not be resolved")]
+    MissingProject,
+
+    #[error("Database name (database) could not be resolved")]
+    MissingDatabase,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedConfig {
     pub org: String,
@@ -41,11 +71,15 @@ pub fn find_config_file(start_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Reads and parses the config file if found.
-pub fn load_config_file(path: &Path) -> Result<XatanConfig, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read config file {}: {}", path.display(), e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse config file {}: {}", path.display(), e))
+pub fn load_config_file(path: &Path) -> Result<XatanConfig, ConfigError> {
+    let content = std::fs::read_to_string(path).map_err(|e| ConfigError::ReadFile {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    serde_json::from_str(&content).map_err(|e| ConfigError::ParseFile {
+        path: path.to_path_buf(),
+        source: e,
+    })
 }
 
 /// Testable configuration resolution logic.
@@ -53,14 +87,14 @@ pub fn resolve_config_impl<E>(
     get_env: E,
     config_file: Option<XatanConfig>,
     defaults: (Option<String>, Option<String>, Option<String>),
-) -> Result<ResolvedConfig, String>
+) -> Result<ResolvedConfig, ConfigError>
 where
     E: Fn(&str) -> Option<String>,
 {
     // 1. Resolve API Key (required for all API-interacting commands)
     let api_key = get_env("XATA_API_KEY")
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "XATA_API_KEY environment variable is missing or empty".to_string())?;
+        .ok_or(ConfigError::MissingApiKey)?;
 
     // Unpack config file values
     let file_org = config_file.as_ref().and_then(|c| c.org.clone());
@@ -76,20 +110,20 @@ where
         .or(file_org)
         .or(def_org)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "Organization ID (org) could not be resolved".to_string())?;
+        .ok_or(ConfigError::MissingOrg)?;
 
     let project = get_env("XATA_PROJECT_ID")
         .or(file_project)
         .or(def_project)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "Project ID (project) could not be resolved".to_string())?;
+        .ok_or(ConfigError::MissingProject)?;
 
     let database = get_env("XATA_DATABASE_NAME")
         .or_else(|| get_env("XATA_DATABASE"))
         .or(file_database)
         .or(def_database)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "Database name (database) could not be resolved".to_string())?;
+        .ok_or(ConfigError::MissingDatabase)?;
 
     let fallback_parent = get_env("XATAN_FALLBACK_PARENT")
         .or(file_fallback_parent)
@@ -111,15 +145,12 @@ where
 }
 
 /// Resolves the configuration dynamically from environment variables and local `.xatanrc` or `xatan.json`.
-pub fn resolve_config() -> Result<ResolvedConfig, String> {
-    let current_dir =
-        std::env::current_dir().map_err(|e| format!("Failed to get current directory: {}", e))?;
+pub fn resolve_config() -> Result<ResolvedConfig, ConfigError> {
+    let current_dir = std::env::current_dir()?;
 
-    let config_file = if let Some(path) = find_config_file(&current_dir) {
-        Some(load_config_file(&path)?)
-    } else {
-        None
-    };
+    let config_file = find_config_file(&current_dir)
+        .map(|path| load_config_file(&path))
+        .transpose()?;
 
     let defaults = get_xata_defaults();
 
@@ -134,30 +165,33 @@ pub fn parse_database_url(url: &str) -> (Option<String>, Option<String>, Option<
     let mut parts = without_scheme.split('/');
     let host = parts.next().unwrap_or("");
 
-    let mut db_name = None;
     let path_segments: Vec<&str> = parts.collect();
-    if let Some(pos) = path_segments.iter().position(|&s| s == "db")
-        && pos + 1 < path_segments.len()
-    {
-        let db_segment = path_segments[pos + 1];
-        let clean_db = db_segment.split(':').next().unwrap_or(db_segment);
-        db_name = Some(clean_db.to_string());
-    }
+    let db_name = path_segments
+        .iter()
+        .position(|&s| s == "db")
+        .and_then(|pos| path_segments.get(pos + 1))
+        .map(|db_segment| {
+            db_segment
+                .split(':')
+                .next()
+                .unwrap_or(db_segment)
+                .to_string()
+        });
 
     let host_parts: Vec<&str> = host.split('.').collect();
-    let subdomain = host_parts.first().unwrap_or(&"");
+    let subdomain = host_parts.first().copied().unwrap_or("");
 
-    let mut org = None;
-    let mut project = None;
-    if !subdomain.is_empty() {
-        if let Some(idx) = subdomain.find('-') {
-            let (o, p) = subdomain.split_at(idx);
-            org = Some(o.to_string());
-            project = Some(p.trim_start_matches('-').to_string());
-        } else {
-            org = Some(subdomain.to_string());
-        }
-    }
+    let (org, project) = if subdomain.is_empty() {
+        (None, None)
+    } else if let Some(idx) = subdomain.find('-') {
+        let (o, p) = subdomain.split_at(idx);
+        (
+            Some(o.to_string()),
+            Some(p.trim_start_matches('-').to_string()),
+        )
+    } else {
+        (Some(subdomain.to_string()), None)
+    };
 
     (org, project, db_name)
 }
@@ -170,35 +204,37 @@ pub fn get_xata_defaults() -> (Option<String>, Option<String>, Option<String>) {
         .or_else(|_| std::env::var("XATA_DATABASE"))
         .ok();
 
-    if org.is_none() || project.is_none() || database.is_none() {
-        let files = [
-            ".xata/config.json",
-            ".xatarc",
-            ".xatarc.json",
-            "xatarc.json",
-        ];
-        for f in files {
-            if let Ok(content) = std::fs::read_to_string(f)
-                && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
-            {
-                let db_url = val
-                    .get("databaseURL")
-                    .or_else(|| val.get("databaseUrl"))
-                    .and_then(|v| v.as_str());
+    if org.is_some() && project.is_some() && database.is_some() {
+        return (org, project, database);
+    }
 
-                if let Some(url) = db_url {
-                    let (parsed_org, parsed_proj, parsed_db) = parse_database_url(url);
-                    if org.is_none() {
-                        org = parsed_org;
-                    }
-                    if project.is_none() {
-                        project = parsed_proj;
-                    }
-                    if database.is_none() {
-                        database = parsed_db;
-                    }
-                }
-            }
+    let files = [
+        ".xata/config.json",
+        ".xatarc",
+        ".xatarc.json",
+        "xatarc.json",
+    ];
+    for f in files {
+        let Ok(content) = std::fs::read_to_string(f) else {
+            continue;
+        };
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+
+        let db_url = val
+            .get("databaseURL")
+            .or_else(|| val.get("databaseUrl"))
+            .and_then(|v| v.as_str());
+
+        if let Some(url) = db_url {
+            let (parsed_org, parsed_proj, parsed_db) = parse_database_url(url);
+            org = org.or(parsed_org);
+            project = project.or(parsed_proj);
+            database = database.or(parsed_db);
+        }
+        if org.is_some() && project.is_some() && database.is_some() {
+            break;
         }
     }
 
@@ -352,7 +388,7 @@ mod tests {
 
         let res = resolve_config_impl(get_env, None, (None, None, None));
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("Organization ID"));
+        assert!(res.unwrap_err().to_string().contains("Organization ID"));
     }
 
     #[test]
@@ -370,7 +406,7 @@ mod tests {
 
         let res = resolve_config_impl(get_env, None, (None, None, None));
         assert!(res.is_err());
-        assert!(res.unwrap_err().contains("XATA_API_KEY"));
+        assert!(res.unwrap_err().to_string().contains("XATA_API_KEY"));
     }
 
     #[test]
