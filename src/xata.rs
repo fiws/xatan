@@ -25,6 +25,33 @@ pub struct CreateBranchRequest {
     pub parent_id: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum XataError {
+    #[error("Xata API error ({status}): {message}")]
+    Api { status: u16, message: String },
+
+    #[error("HTTP request failed: {0}")]
+    Http(Box<ureq::Error>),
+
+    #[error("Failed to parse response: {0}")]
+    Parse(String),
+}
+
+impl From<ureq::Error> for XataError {
+    fn from(err: ureq::Error) -> Self {
+        XataError::Http(Box::new(err))
+    }
+}
+
+impl XataError {
+    pub fn is_not_found(&self) -> bool {
+        match self {
+            XataError::Api { status: 404, .. } => true,
+            XataError::Http(err) => matches!(**err, ureq::Error::Status(404, _)),
+            _ => false,
+        }
+    }
+}
 pub struct XataClient {
     base_url: String,
     api_key: String,
@@ -55,31 +82,37 @@ impl XataClient {
         &self.client
     }
 
-    fn handle_error_response(&self, response: ureq::Response) -> String {
+    fn handle_error_response(&self, response: ureq::Response) -> XataError {
         let status = response.status();
         let text = response.into_string().unwrap_or_default();
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text)
             && let Some(msg) = val.get("message").and_then(|m| m.as_str())
         {
-            return format!("Xata API error ({}): {}", status, msg);
+            return XataError::Api {
+                status,
+                message: msg.to_string(),
+            };
         }
-        format!("Xata API error ({}): {}", status, text)
+        XataError::Api {
+            status,
+            message: text,
+        }
     }
 
     /// Retrieves detailed information about a specific branch.
     /// Returns Ok(Some(branch)) if found, Ok(None) if 404 (missing), or Err on failure.
-    pub fn get_branch(&self, branch_name: &str) -> Result<Option<XataBranch>, String> {
-        let mut target_id = branch_name.to_string();
-        if let Ok(branches) = self.list_branches() {
-            if let Some(b) = branches
+    pub fn get_branch(&self, branch_name: &str) -> Result<Option<XataBranch>, XataError> {
+        let target_id = if let Ok(branches) = self.list_branches() {
+            let Some(b) = branches
                 .iter()
                 .find(|b| b.name == branch_name || b.id == branch_name)
-            {
-                target_id = b.id.clone();
-            } else {
+            else {
                 return Ok(None);
-            }
-        }
+            };
+            b.id.clone()
+        } else {
+            branch_name.to_string()
+        };
 
         let url = format!(
             "{}/organizations/{}/projects/{}/branches/{}",
@@ -94,7 +127,7 @@ impl XataClient {
         {
             Ok(resp) => resp,
             Err(ureq::Error::Status(_code, resp)) => resp,
-            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            Err(err) => return Err(err.into()),
         };
 
         if response.status() == 404 {
@@ -107,7 +140,7 @@ impl XataClient {
 
         let branch: XataBranch = response
             .into_json()
-            .map_err(|e| format!("Failed to parse branch details response: {}", e))?;
+            .map_err(|e| XataError::Parse(e.to_string()))?;
 
         Ok(Some(branch))
     }
@@ -117,7 +150,7 @@ impl XataClient {
         &self,
         branch_name: &str,
         parent_branch: Option<&str>,
-    ) -> Result<XataBranch, String> {
+    ) -> Result<XataBranch, XataError> {
         let url = format!(
             "{}/organizations/{}/projects/{}/branches",
             self.base_url, self.org, self.project
@@ -137,7 +170,7 @@ impl XataClient {
         {
             Ok(resp) => resp,
             Err(ureq::Error::Status(_code, resp)) => resp,
-            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            Err(err) => return Err(err.into()),
         };
 
         if response.status() < 200 || response.status() >= 300 {
@@ -146,24 +179,24 @@ impl XataClient {
 
         let branch: XataBranch = response
             .into_json()
-            .map_err(|e| format!("Failed to parse create branch response: {}", e))?;
+            .map_err(|e| XataError::Parse(e.to_string()))?;
 
         Ok(branch)
     }
 
     /// Permanently deletes a specific branch.
-    pub fn delete_branch(&self, branch_name: &str) -> Result<(), String> {
-        let mut target_id = branch_name.to_string();
-        if let Ok(branches) = self.list_branches() {
-            if let Some(b) = branches
+    pub fn delete_branch(&self, branch_name: &str) -> Result<(), XataError> {
+        let target_id = if let Ok(branches) = self.list_branches() {
+            let Some(b) = branches
                 .iter()
                 .find(|b| b.name == branch_name || b.id == branch_name)
-            {
-                target_id = b.id.clone();
-            } else {
+            else {
                 return Ok(());
-            }
-        }
+            };
+            b.id.clone()
+        } else {
+            branch_name.to_string()
+        };
 
         let url = format!(
             "{}/organizations/{}/projects/{}/branches/{}",
@@ -178,7 +211,7 @@ impl XataClient {
         {
             Ok(resp) => resp,
             Err(ureq::Error::Status(_code, resp)) => resp,
-            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            Err(err) => return Err(err.into()),
         };
 
         if response.status() == 404 {
@@ -193,7 +226,7 @@ impl XataClient {
     }
 
     /// Retrieves all branches for the active project.
-    pub fn list_branches(&self) -> Result<Vec<XataBranch>, String> {
+    pub fn list_branches(&self) -> Result<Vec<XataBranch>, XataError> {
         let url = format!(
             "{}/organizations/{}/projects/{}/branches",
             self.base_url, self.org, self.project
@@ -207,7 +240,7 @@ impl XataClient {
         {
             Ok(resp) => resp,
             Err(ureq::Error::Status(_code, resp)) => resp,
-            Err(err) => return Err(format!("HTTP request failed: {}", err)),
+            Err(err) => return Err(err.into()),
         };
 
         if response.status() < 200 || response.status() >= 300 {
@@ -216,7 +249,7 @@ impl XataClient {
 
         let res: XataBranchesResponse = response
             .into_json()
-            .map_err(|e| format!("Failed to parse list branches response: {}", e))?;
+            .map_err(|e| XataError::Parse(e.to_string()))?;
 
         Ok(res.branches)
     }

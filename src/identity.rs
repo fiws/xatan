@@ -10,6 +10,12 @@ fn fnv1a_hash(s: &str) -> u32 {
 
 use std::process::Command;
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq, Clone)]
+pub enum IdentityError {
+    #[error("Failed to resolve any valid identity fallback")]
+    NotFound,
+}
+
 /// Converts raw identifier to an ASCII-safe prefix string.
 /// Rules:
 /// 1. Convert all characters to lowercase.
@@ -28,15 +34,7 @@ pub fn slugify(s: &str) -> String {
         }
     }
     // Trim leading/trailing hyphens
-    let mut start = 0;
-    while start < result.len() && result.as_bytes()[start] == b'-' {
-        start += 1;
-    }
-    let mut end = result.len();
-    while end > start && result.as_bytes()[end - 1] == b'-' {
-        end -= 1;
-    }
-    result[start..end].to_string()
+    result.trim_matches('-').to_string()
 }
 
 /// Query git config for a key. Returns trimmed stdout if successful and non-empty.
@@ -55,7 +53,7 @@ pub fn resolve_identity_impl<E, G, O>(
     get_env: E,
     get_git: G,
     get_os_user: O,
-) -> Result<String, &'static str>
+) -> Result<String, IdentityError>
 where
     E: Fn(&str) -> Option<String>,
     G: Fn(&str) -> Option<String>,
@@ -63,65 +61,52 @@ where
 {
     // 1. Environment Override
     if let Some(override_prefix) = get_env("XATAN_PREFIX") {
-        let trimmed = override_prefix.trim();
-        if !trimmed.is_empty() {
-            let slugged = slugify(trimmed);
-            if !slugged.is_empty() {
-                return Ok(slugged);
-            }
+        let slugged = slugify(override_prefix.trim());
+        if !slugged.is_empty() {
+            return Ok(slugged);
         }
     }
 
     // 2. Git Email Extraction
-    if let Some(email) = get_git("user.email") {
-        let trimmed = email.trim();
-        if !trimmed.is_empty() {
-            let mut parts = trimmed.split('@');
-            if let (Some(local_part), Some(domain)) = (parts.next(), parts.next()) {
-                let local_part_trimmed = local_part.trim();
-                let domain_trimmed = domain.trim();
-                if !local_part_trimmed.is_empty() && !domain_trimmed.is_empty() {
-                    let raw_id = if domain_trimmed.len() <= 12 {
-                        format!("{}-{}", local_part_trimmed, domain_trimmed)
-                    } else {
-                        format!("{}-{:08x}", local_part_trimmed, fnv1a_hash(domain_trimmed))
-                    };
-                    let slugged = slugify(&raw_id);
-                    if !slugged.is_empty() {
-                        return Ok(slugged);
-                    }
-                }
+    if let Some(email) = get_git("user.email")
+        && let Some((local_part, domain)) = email.trim().split_once('@')
+    {
+        let local_trimmed = local_part.trim();
+        let domain_trimmed = domain.trim();
+        if !local_trimmed.is_empty() && !domain_trimmed.is_empty() {
+            let raw_id = if domain_trimmed.len() <= 12 {
+                format!("{}-{}", local_trimmed, domain_trimmed)
+            } else {
+                format!("{}-{:08x}", local_trimmed, fnv1a_hash(domain_trimmed))
+            };
+            let slugged = slugify(&raw_id);
+            if !slugged.is_empty() {
+                return Ok(slugged);
             }
         }
     }
 
     // 3. Git Name Fallback
     if let Some(name) = get_git("user.name") {
-        let trimmed = name.trim();
-        if !trimmed.is_empty() {
-            let slugged = slugify(trimmed);
-            if !slugged.is_empty() {
-                return Ok(slugged);
-            }
+        let slugged = slugify(name.trim());
+        if !slugged.is_empty() {
+            return Ok(slugged);
         }
     }
 
     // 4. OS User Fallback
     if let Some(os_user) = get_os_user() {
-        let trimmed = os_user.trim();
-        if !trimmed.is_empty() {
-            let slugged = slugify(trimmed);
-            if !slugged.is_empty() {
-                return Ok(slugged);
-            }
+        let slugged = slugify(os_user.trim());
+        if !slugged.is_empty() {
+            return Ok(slugged);
         }
     }
 
-    Err("Failed to resolve any valid identity fallback")
+    Err(IdentityError::NotFound)
 }
 
 /// Resolves developer prefix using the Smart Identity Resolution Algorithm.
-pub fn resolve_identity() -> Result<String, String> {
+pub fn resolve_identity() -> Result<String, IdentityError> {
     resolve_identity_impl(
         |key| std::env::var(key).ok(),
         query_git_config,
@@ -131,7 +116,6 @@ pub fn resolve_identity() -> Result<String, String> {
                 .ok()
         },
     )
-    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -270,7 +254,7 @@ mod tests {
 
         assert_eq!(
             resolve_identity_impl(get_env, get_git, get_os_user),
-            Err("Failed to resolve any valid identity fallback")
+            Err(IdentityError::NotFound)
         );
     }
 }

@@ -36,23 +36,28 @@ fn get_cache_path() -> Option<PathBuf> {
 }
 
 pub fn load_cache() -> XatanCache {
-    if let Some(path) = get_cache_path()
-        && path.exists()
-        && let Ok(content) = std::fs::read_to_string(&path)
-        && let Ok(cache) = serde_json::from_str::<XatanCache>(&content)
-    {
-        return cache;
-    }
-    XatanCache::default()
+    let Some(path) = get_cache_path().filter(|p| p.exists()) else {
+        return XatanCache::default();
+    };
+
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return XatanCache::default();
+    };
+
+    serde_json::from_str::<XatanCache>(&content).unwrap_or_default()
 }
+
 pub fn save_cache(cache: &XatanCache) {
-    if let Some(path) = get_cache_path() {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(cache) {
-            let _ = std::fs::write(&path, json);
-        }
+    let Some(path) = get_cache_path() else {
+        return;
+    };
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    if let Ok(json) = serde_json::to_string_pretty(cache) {
+        let _ = std::fs::write(&path, json);
     }
 }
 
