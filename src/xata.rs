@@ -268,6 +268,7 @@ mod tests {
             fallback_parent: "main".to_string(),
             api_key: "test-key".to_string(),
             post_create: None,
+            auto_prune: true,
         }
     }
 

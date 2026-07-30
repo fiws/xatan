@@ -50,6 +50,14 @@ enum Commands {
         /// Skip executing the post-creation database hook
         #[arg(long)]
         skip_post_create: bool,
+
+        /// Run prune in background when dynamically creating a branch (this is the default)
+        #[arg(long, overrides_with = "no_prune")]
+        prune: bool,
+
+        /// Do not run prune in background when dynamically creating a branch
+        #[arg(long, overrides_with = "prune", alias = "skip-prune")]
+        no_prune: bool,
     },
 
     /// Creates a new isolated Xata branch prefixed with your identity
@@ -268,9 +276,18 @@ fn main() -> std::io::Result<()> {
             no_create,
             parent,
             skip_post_create,
+            prune,
+            no_prune,
         } => {
             let create = !no_create;
             let config = resolve_or_exit();
+            let auto_prune = if no_prune {
+                false
+            } else if prune {
+                true
+            } else {
+                config.auto_prune
+            };
             let branch_name = match resolve_target_branch(name.as_deref()) {
                 Ok(b) => b,
                 Err(e) => {
@@ -382,6 +399,14 @@ fn main() -> std::io::Result<()> {
             let rewritten = rewrite_connection_string(&conn_str, &config.database);
             cache::set_cached_url(&branch_name, &rewritten);
 
+            if auto_prune {
+                if is_tty {
+                    log::info("Running prune in background...")?;
+                }
+                if let Err(e) = spawn_background_prune() {
+                    log::warning(format!("Failed to spawn background prune: {}", e))?;
+                }
+            }
             if !skip_post_create
                 && let Some(command) = config
                     .post_create
@@ -1169,6 +1194,7 @@ fn run_init() -> Result<(), String> {
         database: Some(database.trim().to_string()),
         fallback_parent: Some("main".to_string()),
         post_create: None,
+        auto_prune: None,
     };
 
     let config_json = serde_json::to_string_pretty(&payload)
@@ -1511,6 +1537,21 @@ fn run_post_create_hook(
 
     Ok(())
 }
+/// Spawns `xatan prune --yes` in the background asynchronously.
+fn spawn_background_prune() -> Result<(), String> {
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("xatan"));
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("prune").arg("--yes");
+
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::null());
+
+    cmd.spawn()
+        .map_err(|e| format!("Failed to spawn background prune: {}", e))?;
+
+    Ok(())
+}
 
 pub fn humanize_time_ago(date_str: &str) -> String {
     let parsed = match chrono::DateTime::parse_from_rfc3339(date_str) {
@@ -1696,6 +1737,7 @@ mod tests {
             fallback_parent: "main".to_string(),
             api_key: "test-key".to_string(),
             post_create: None,
+            auto_prune: true,
         };
         let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
         assert!(res.is_ok());
@@ -1715,6 +1757,7 @@ mod tests {
             fallback_parent: "main".to_string(),
             api_key: "test-key".to_string(),
             post_create: None,
+            auto_prune: true,
         };
         let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
         assert!(res.is_err());
@@ -1736,6 +1779,7 @@ mod tests {
             fallback_parent: "main".to_string(),
             api_key: "test-key".to_string(),
             post_create: None,
+            auto_prune: true,
         };
         let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
         assert!(res.is_ok());
@@ -1764,6 +1808,59 @@ mod tests {
                 assert_eq!(shell, clap_complete::Shell::Bash);
             }
             _ => panic!("Expected Completions variant"),
+        }
+    }
+
+    #[test]
+    fn test_url_cli_flags_prune() {
+        use clap::Parser;
+
+        // Default: neither prune nor no_prune passed
+        let cli1 = Cli::try_parse_from(["xatan", "url"]).unwrap();
+        if let Commands::Url {
+            prune, no_prune, ..
+        } = cli1.command
+        {
+            assert!(!prune);
+            assert!(!no_prune);
+        } else {
+            panic!("Expected Url variant");
+        }
+
+        // With --prune
+        let cli2 = Cli::try_parse_from(["xatan", "url", "--prune"]).unwrap();
+        if let Commands::Url {
+            prune, no_prune, ..
+        } = cli2.command
+        {
+            assert!(prune);
+            assert!(!no_prune);
+        } else {
+            panic!("Expected Url variant");
+        }
+
+        // With --no-prune
+        let cli3 = Cli::try_parse_from(["xatan", "url", "--no-prune"]).unwrap();
+        if let Commands::Url {
+            prune, no_prune, ..
+        } = cli3.command
+        {
+            assert!(!prune);
+            assert!(no_prune);
+        } else {
+            panic!("Expected Url variant");
+        }
+
+        // With --skip-prune (alias for --no-prune)
+        let cli4 = Cli::try_parse_from(["xatan", "url", "--skip-prune"]).unwrap();
+        if let Commands::Url {
+            prune, no_prune, ..
+        } = cli4.command
+        {
+            assert!(!prune);
+            assert!(no_prune);
+        } else {
+            panic!("Expected Url variant");
         }
     }
 }

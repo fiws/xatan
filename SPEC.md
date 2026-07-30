@@ -115,6 +115,11 @@ Implementations read configuration from a file named `.xatanrc` or `xatan.json` 
     "postCreate": {
       "type": "string",
       "description": "An optional hook command to run immediately after a database branch is created or recreated"
+    },
+    "autoPrune": {
+      "type": "boolean",
+      "description": "Whether to run prune in the background when xatan url dynamically creates a new branch",
+      "default": true
     }
   },
   "required": ["org", "project", "database"]
@@ -206,6 +211,8 @@ OPTIONS:
     --no-create           Do not auto-create the branch in Xata if it does not exist
     --parent <BRANCH>     The parent branch to clone from if creating [default: main]
     --skip-post-create    Skip executing the post-creation database hook
+    --prune               Run background prune when dynamically creating a branch (default)
+    --no-prune            Do not run background prune when dynamically creating a branch
 
 * **Resolution Logic:**
   1. Determine developer prefix (e.g., `jane-doe`).
@@ -216,7 +223,7 @@ OPTIONS:
   4. Query Xata API to see if `<prefix>-<suffix>` exists.
   5. **Branch Exists:** Retrieve its connection URL, write it to `stdout`, and exit `0`.
   6. **Branch is Missing:**
-     * If `--no-create` is not set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL, write it to `stdout`, and exit `0`.
+     * If `--no-create` is not set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, trigger background prune (unless disabled via `--no-prune` or config), execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL, write it to `stdout`, and exit `0`.
 * **Exit Codes:**
   * `0`: Success (printed URL to stdout).
   * `1`: General Error (invalid configuration, missing network).

@@ -9,6 +9,14 @@ pub struct XatanConfig {
     pub database: Option<String>,
     pub fallback_parent: Option<String>,
     pub post_create: Option<String>,
+    #[serde(
+        default,
+        alias = "auto_prune",
+        alias = "pruneOnCreate",
+        alias = "prune_on_create",
+        alias = "prune"
+    )]
+    pub auto_prune: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +57,7 @@ pub struct ResolvedConfig {
     pub fallback_parent: String,
     pub api_key: String,
     pub post_create: Option<String>,
+    pub auto_prune: bool,
 }
 
 /// Recursively searches for `.xatanrc` or `xatan.json` starting from `start_dir` and going up.
@@ -82,6 +91,14 @@ pub fn load_config_file(path: &Path) -> Result<XatanConfig, ConfigError> {
     })
 }
 
+fn parse_bool_env(val: &str) -> Option<bool> {
+    match val.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Some(true),
+        "false" | "0" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 /// Testable configuration resolution logic.
 pub fn resolve_config_impl<E>(
     get_env: E,
@@ -102,6 +119,7 @@ where
     let file_database = config_file.as_ref().and_then(|c| c.database.clone());
     let file_fallback_parent = config_file.as_ref().and_then(|c| c.fallback_parent.clone());
     let file_post_create = config_file.as_ref().and_then(|c| c.post_create.clone());
+    let file_auto_prune = config_file.as_ref().and_then(|c| c.auto_prune);
 
     let (def_org, def_project, def_database) = defaults;
 
@@ -134,6 +152,18 @@ where
         .or(file_post_create)
         .filter(|s| !s.trim().is_empty());
 
+    let auto_prune = get_env("XATAN_AUTO_PRUNE")
+        .as_deref()
+        .and_then(parse_bool_env)
+        .or_else(|| {
+            get_env("XATAN_PRUNE_ON_CREATE")
+                .as_deref()
+                .and_then(parse_bool_env)
+        })
+        .or_else(|| get_env("XATAN_PRUNE").as_deref().and_then(parse_bool_env))
+        .or(file_auto_prune)
+        .unwrap_or(true);
+
     Ok(ResolvedConfig {
         org: org.trim().to_string(),
         project: project.trim().to_string(),
@@ -141,6 +171,7 @@ where
         fallback_parent: fallback_parent.trim().to_string(),
         api_key: api_key.trim().to_string(),
         post_create,
+        auto_prune,
     })
 }
 
@@ -270,6 +301,7 @@ mod tests {
                 fallback_parent: "my-parent".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
+                auto_prune: true,
             }
         );
     }
@@ -289,6 +321,7 @@ mod tests {
             database: Some("file-db".to_string()),
             fallback_parent: Some("file-parent".to_string()),
             post_create: None,
+            auto_prune: None,
         };
 
         let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
@@ -301,6 +334,7 @@ mod tests {
                 fallback_parent: "file-parent".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
+                auto_prune: true,
             }
         );
     }
@@ -325,6 +359,7 @@ mod tests {
             database: Some("file-db".to_string()),
             fallback_parent: Some("file-parent".to_string()),
             post_create: None,
+            auto_prune: None,
         };
 
         let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
@@ -337,6 +372,7 @@ mod tests {
                 fallback_parent: "file-parent".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
+                auto_prune: true,
             }
         );
     }
@@ -457,6 +493,7 @@ mod tests {
                 fallback_parent: "main".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
+                auto_prune: true,
             }
         );
     }
@@ -495,8 +532,8 @@ mod tests {
             database: Some("file-db".to_string()),
             fallback_parent: None,
             post_create: Some("sh ./file_hook.sh".to_string()),
+            auto_prune: None,
         };
-
         let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
         assert_eq!(resolved.post_create, Some("sh ./file_hook.sh".to_string()));
     }
@@ -519,9 +556,117 @@ mod tests {
             database: Some("file-db".to_string()),
             fallback_parent: None,
             post_create: Some("sh ./file_hook.sh".to_string()),
+            auto_prune: None,
         };
 
         let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
         assert_eq!(resolved.post_create, Some("sh ./env_hook.sh".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_config_auto_prune_default() {
+        let envs = [
+            ("XATA_API_KEY", "my-api-key"),
+            ("XATA_ORG_ID", "my-org"),
+            ("XATA_PROJECT_ID", "my-project"),
+            ("XATA_DATABASE_NAME", "my-db"),
+        ];
+        let get_env = |key: &str| {
+            envs.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+
+        let resolved = resolve_config_impl(get_env, None, (None, None, None)).unwrap();
+        assert!(resolved.auto_prune);
+    }
+
+    #[test]
+    fn test_resolve_config_auto_prune_file() {
+        let envs = [("XATA_API_KEY", "my-api-key")];
+        let get_env = |key: &str| {
+            envs.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+
+        let json = r#"{
+            "org": "file-org",
+            "project": "file-project",
+            "database": "file-db",
+            "autoPrune": false
+        }"#;
+        let config: XatanConfig = serde_json::from_str(json).unwrap();
+        let resolved = resolve_config_impl(get_env, Some(config), (None, None, None)).unwrap();
+        assert!(!resolved.auto_prune);
+
+        // Test alias pruneOnCreate
+        let json2 = r#"{
+            "org": "file-org",
+            "project": "file-project",
+            "database": "file-db",
+            "pruneOnCreate": false
+        }"#;
+        let config2: XatanConfig = serde_json::from_str(json2).unwrap();
+        let resolved2 = resolve_config_impl(get_env, Some(config2), (None, None, None)).unwrap();
+        assert!(!resolved2.auto_prune);
+
+        // Test alias auto_prune (snake_case)
+        let json3 = r#"{
+            "org": "file-org",
+            "project": "file-project",
+            "database": "file-db",
+            "auto_prune": false
+        }"#;
+        let config3: XatanConfig = serde_json::from_str(json3).unwrap();
+        let resolved3 = resolve_config_impl(get_env, Some(config3), (None, None, None)).unwrap();
+        assert!(!resolved3.auto_prune);
+    }
+
+    #[test]
+    fn test_resolve_config_auto_prune_env_override() {
+        let envs = [
+            ("XATA_API_KEY", "my-api-key"),
+            ("XATA_ORG_ID", "my-org"),
+            ("XATA_PROJECT_ID", "my-project"),
+            ("XATA_DATABASE_NAME", "my-db"),
+            ("XATAN_AUTO_PRUNE", "false"),
+        ];
+        let get_env = |key: &str| {
+            envs.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+
+        let file_config = XatanConfig {
+            org: Some("file-org".to_string()),
+            project: Some("file-project".to_string()),
+            database: Some("file-db".to_string()),
+            fallback_parent: None,
+            post_create: None,
+            auto_prune: Some(true),
+        };
+
+        let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
+        assert!(!resolved.auto_prune);
+    }
+    #[test]
+    fn test_resolve_config_auto_prune_env_fallback_unparseable() {
+        let envs = [
+            ("XATA_API_KEY", "my-api-key"),
+            ("XATA_ORG_ID", "my-org"),
+            ("XATA_PROJECT_ID", "my-project"),
+            ("XATA_DATABASE_NAME", "my-db"),
+            ("XATAN_AUTO_PRUNE", "invalid"),
+            ("XATAN_PRUNE_ON_CREATE", "false"),
+        ];
+        let get_env = |key: &str| {
+            envs.iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        };
+
+        let resolved = resolve_config_impl(get_env, None, (None, None, None)).unwrap();
+        assert!(!resolved.auto_prune);
     }
 }

@@ -40,7 +40,7 @@ This will walk you through a quick interactive setup and write a `.xatanrc` to y
 ## Commands
 
 - **`whoami`**: Prints your resolved developer identity prefix (e.g., `jane-doe`).
-- **`url [NAME]`**: Prints the Postgres connection URL for your branch. If the branch doesn't exist, `xatan` automatically creates it first. Pass `--no-create` to skip auto-creation.
+- **`url [NAME]`**: Prints the Postgres connection URL for your branch. If the branch doesn't exist, `xatan` automatically creates it first and prunes unneeded remote branches in the background (enabled by default; configurable via `autoPrune`/`XATAN_AUTO_PRUNE`). Pass `--no-create` to skip auto-creation, or `--no-prune` (`--skip-prune`) to skip background pruning.
 - **`create <NAME>`**: Creates an isolated database branch prefixed with your identity.
 - **`recreate [NAME]`**: Tears down and re-clones your branch from a parent (defaults to `main`), resetting your test data state.
 - **`delete [NAME]`**: Deletes your developer branch safely.
