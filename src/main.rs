@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use cliclack::log;
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -111,9 +112,24 @@ enum Commands {
         yes: bool,
     },
 
+    /// Runs native psql with authenticated credentials for the resolved branch
+    #[command(
+        trailing_var_arg = true,
+        after_help = "Examples:\n  xatan psql\n  xatan psql -c \"SELECT current_database()\"\n  xatan psql --branch feature -f schema.sql"
+    )]
+    Psql {
+        /// The branch suffix to connect to. Defaults to the current VCS branch counterpart.
+        #[arg(long, value_name = "NAME")]
+        branch: Option<String>,
+
+        /// Arguments passed directly to native psql
+        #[arg(value_name = "PSQL_ARGS", allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
+
     /// Launches an interactive psql connection targeting the resolved branch
     Shell {
-        /// The suffix of the branch to open. Defaults to current Git branch counterpart.
+        /// The suffix of the branch to open. Defaults to current VCS branch counterpart.
         name: Option<String>,
     },
 
@@ -247,6 +263,57 @@ fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
         return Ok(suffix);
     }
     Ok(format!("{}-{}", prefix, suffix))
+}
+
+fn psql_command(connection_url: &str, args: &[OsString]) -> Command {
+    let mut command = Command::new("psql");
+    command.args(args).arg(connection_url);
+    command
+}
+
+fn run_psql(name: Option<&str>, args: &[OsString]) -> std::io::Result<()> {
+    let config = resolve_or_exit();
+    let branch_name = match resolve_target_branch(name) {
+        Ok(b) => b,
+        Err(e) => {
+            log::error(&e)?;
+            std::process::exit(1);
+        }
+    };
+
+    // Check cache first for sub-millisecond psql startup.
+    if let Some(cached_url) = cache::get_cached_url(&branch_name) {
+        let err = psql_command(&cached_url, args).exec();
+        log::error(format!("Failed to execute psql: {}", err))?;
+        std::process::exit(1);
+    }
+
+    let client = xata::XataClient::new(&config);
+    let branch = match client.get_branch(&branch_name) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            log::error(format!("Branch '{}' does not exist.", branch_name))?;
+            std::process::exit(2);
+        }
+        Err(e) => {
+            log::error(format!("API Error: {}", e))?;
+            std::process::exit(1);
+        }
+    };
+
+    let Some(conn_str) = branch.connection_string else {
+        log::error(format!(
+            "Branch '{}' exists but has no connection URL.",
+            branch_name
+        ))?;
+        std::process::exit(1);
+    };
+
+    let rewritten = rewrite_connection_string(&conn_str, &config.database);
+    cache::set_cached_url(&branch_name, &rewritten);
+    let err = psql_command(&rewritten, args).exec();
+    log::error(format!("Failed to execute psql: {}", err))?;
+    std::process::exit(1);
 }
 
 fn main() -> std::io::Result<()> {
@@ -843,49 +910,11 @@ fn main() -> std::io::Result<()> {
             cache::remove_cached_url(&branch_name);
             std::process::exit(0);
         }
+        Commands::Psql { branch, args } => {
+            run_psql(branch.as_deref(), &args)?;
+        }
         Commands::Shell { name } => {
-            let config = resolve_or_exit();
-            let branch_name = match resolve_target_branch(name.as_deref()) {
-                Ok(b) => b,
-                Err(e) => {
-                    log::error(&e)?;
-                    std::process::exit(1);
-                }
-            };
-
-            // Check cache first for sub-millisecond psql startup
-            if let Some(cached_url) = cache::get_cached_url(&branch_name) {
-                let err = Command::new("psql").arg(cached_url).exec();
-                log::error(format!("Failed to execute psql: {}", err))?;
-                std::process::exit(1);
-            }
-
-            let client = xata::XataClient::new(&config);
-            let branch = match client.get_branch(&branch_name) {
-                Ok(Some(b)) => b,
-                Ok(None) => {
-                    log::error(format!("Branch '{}' does not exist.", branch_name))?;
-                    std::process::exit(2);
-                }
-                Err(e) => {
-                    log::error(format!("API Error: {}", e))?;
-                    std::process::exit(1);
-                }
-            };
-
-            let Some(conn_str) = branch.connection_string else {
-                log::error(format!(
-                    "Branch '{}' exists but has no connection URL.",
-                    branch_name
-                ))?;
-                std::process::exit(1);
-            };
-
-            let rewritten = rewrite_connection_string(&conn_str, &config.database);
-            cache::set_cached_url(&branch_name, &rewritten);
-            let err = Command::new("psql").arg(rewritten).exec();
-            log::error(format!("Failed to execute psql: {}", err))?;
-            std::process::exit(1);
+            run_psql(name.as_deref(), &[])?;
         }
         Commands::Prune { yes } => {
             let config = resolve_or_exit();
@@ -1809,6 +1838,65 @@ mod tests {
             }
             _ => panic!("Expected Completions variant"),
         }
+    }
+
+    #[test]
+    fn test_psql_subcommand_forwards_native_arguments() {
+        use clap::Parser;
+
+        let query = "SELECT c_defaults FROM user_info WHERE c_uid = 'testuser'";
+        let cli = Cli::try_parse_from(["xatan", "psql", "-c", query]).unwrap();
+        match cli.command {
+            Commands::Psql { branch, args } => {
+                assert!(branch.is_none());
+                assert_eq!(args, [OsString::from("-c"), OsString::from(query)]);
+            }
+            _ => panic!("Expected Psql variant"),
+        }
+    }
+
+    #[test]
+    fn test_psql_subcommand_parses_branch_option() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from(["xatan", "psql", "--branch", "feature", "-f", "schema.sql"])
+            .unwrap();
+        match cli.command {
+            Commands::Psql { branch, args } => {
+                assert_eq!(branch.as_deref(), Some("feature"));
+                assert_eq!(args, [OsString::from("-f"), OsString::from("schema.sql")]);
+            }
+            _ => panic!("Expected Psql variant"),
+        }
+    }
+
+    #[test]
+    fn test_shell_subcommand_remains_compatible() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from(["xatan", "shell", "feature"]).unwrap();
+        match cli.command {
+            Commands::Shell { name } => assert_eq!(name.as_deref(), Some("feature")),
+            _ => panic!("Expected Shell variant"),
+        }
+    }
+
+    #[test]
+    fn test_psql_command_appends_authenticated_connection_url() {
+        let command = psql_command(
+            "postgresql://user:password@example.test/database",
+            &[OsString::from("-c"), OsString::from("SELECT 1")],
+        );
+        let args: Vec<_> = command.get_args().collect();
+
+        assert_eq!(
+            args,
+            [
+                std::ffi::OsStr::new("-c"),
+                std::ffi::OsStr::new("SELECT 1"),
+                std::ffi::OsStr::new("postgresql://user:password@example.test/database"),
+            ]
+        );
     }
 
     #[test]

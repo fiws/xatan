@@ -346,15 +346,24 @@ OPTIONS:
 
 ---
 
-### 4.8. `shell`
-Launches an interactive `psql` connection or console targeting the resolved branch.
+### 4.8. `psql`
+Runs native `psql` with authenticated credentials for the resolved branch.
+
+```text
+xatan psql [--branch NAME] [PSQL_ARGS]...
+```
 
 * **Behavior:**
-  1. Resolve target branch name: `<prefix>-<suffix>`.
-  2. Query Xata API for the branch database credentials.
-  3. Execute `psql` (or equivalent database client process), replacing the current process context (`execve`) so that terminal signals and input are handled directly by the shell client.
+  1. Resolve the target branch from `--branch NAME`, or from the current VCS branch when omitted.
+  2. Resolve the authenticated branch connection URL from the local cache or Xata API.
+  3. Forward every `PSQL_ARGS` value unchanged to native `psql`, then supply the authenticated connection URL.
+  4. Replace the current process context (`execve`) so terminal signals, input, output, and the native `psql` exit status pass through directly.
+* **Examples:**
+  * `xatan psql -c "SELECT current_database()"`
+  * `xatan psql --branch feature -f schema.sql`
+* **Compatibility:** `xatan shell [NAME]` remains available for interactive connections.
 * **Exit Codes:**
-  * Inherits exit status of the database client process, or `1` if the connection could not be established.
+  * Inherits the exit status of `psql`, or `1` if `psql` could not be executed or the connection could not be established.
 
 ---
 

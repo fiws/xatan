@@ -45,8 +45,15 @@ This will walk you through a quick interactive setup and write a `.xatanrc` to y
 - **`recreate [NAME]`**: Tears down and re-clones your branch from a parent (defaults to `main`), resetting your test data state.
 - **`delete [NAME]`**: Deletes your developer branch safely.
 - **`list`**: Lists database branches. Shows only your own by default. Use `--all` to view other developers' branches.
-- **`shell [NAME]`**: Launches an interactive `psql` connection targeting your branch, with full Unix signal forwarding.
+- **`psql [--branch NAME] [PSQL_ARGS]...`**: Runs native `psql` against your authenticated branch connection. Every trailing argument is forwarded unchanged; use `--branch` to target a non-default branch. The existing **`shell [NAME]`** command remains available for interactive use.
 - **`prune`**: Automatically identifies and deletes remote database branches that no longer have a local Git branch or Jujutsu revision equivalent.
+
+For example, native `psql` flags work directly:
+
+```bash
+xatan psql -c "SELECT c_defaults FROM user_info WHERE c_uid = 'testuser'"
+xatan psql --branch feature -f schema.sql
+```
 
 ## Automated Post-Creation Hooks
 
@@ -85,9 +92,9 @@ Now, any tool, framework, or ORM (like Prisma, Drizzle, or `psql`) automatically
 
 ```toml
 # mise.toml
-[tasks."db:shell"]
-description = "Open a psql shell to your isolated branch"
-run = "xatan shell"
+[tasks."db:psql"]
+description = "Open psql for the isolated branch"
+run = "xatan psql"
 
 [tasks."db:recreate"]
 description = "Reset your database branch and seed it from main"
