@@ -207,7 +207,6 @@ ARGS:
               slugified active Git branch or Jujutsu revision, then `nobranch`.
 
 OPTIONS:
-    --create              Auto-create the branch in Xata if it does not exist (default)
     --no-create           Do not auto-create the branch in Xata if it does not exist
     --parent <BRANCH>     The parent branch to clone from if creating [default: main]
     --skip-post-create    Skip executing the post-creation database hook

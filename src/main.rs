@@ -37,12 +37,8 @@ enum Commands {
         /// The suffix of the target branch. Defaults to the current VCS ref, then `nobranch`.
         name: Option<String>,
 
-        /// Auto-create the branch in Xata if it does not exist (this is now the default)
-        #[arg(long, overrides_with = "no_create")]
-        create: bool,
-
         /// Do not auto-create the branch in Xata if it does not exist
-        #[arg(long, overrides_with = "create")]
+        #[arg(long)]
         no_create: bool,
 
         /// The parent branch to clone from if creating
@@ -377,14 +373,12 @@ fn main() -> std::io::Result<()> {
         },
         Commands::Url {
             name,
-            create: _,
             no_create,
             parent,
             skip_post_create,
             prune,
             no_prune,
         } => {
-            let create = !no_create;
             let config = resolve_or_exit();
             let auto_prune = if no_prune {
                 false
@@ -436,7 +430,7 @@ fn main() -> std::io::Result<()> {
                 std::process::exit(0);
             }
 
-            if !create {
+            if no_create {
                 log::error(format!(
                     "Branch '{}' does not exist. Omit --no-create to create it dynamically.",
                     branch_name
