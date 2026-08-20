@@ -5,6 +5,7 @@ use std::io::IsTerminal;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
+const NO_BRANCH_SUFFIX: &str = "nobranch";
 
 mod cache;
 mod config;
@@ -33,7 +34,7 @@ enum Commands {
 
     /// Resolves and prints the connection URL for a database branch
     Url {
-        /// The suffix of the target branch. Defaults to current Git branch counterpart.
+        /// The suffix of the target branch. Defaults to the current VCS ref, then `nobranch`.
         name: Option<String>,
 
         /// Auto-create the branch in Xata if it does not exist (this is now the default)
@@ -244,25 +245,62 @@ fn find_convention_hook_file() -> Option<String> {
     None
 }
 
-/// Resolves full target branch name `<prefix>-<suffix>` using Smart Identity Resolution Algorithm
-fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
-    let prefix = identity::resolve_identity().map_err(|e| e.to_string())?;
-    let suffix = if let Some(n) = name_arg {
-        identity::slugify(n)
+/// Resolves a full target branch name from explicit, VCS, and fallback suffix sources.
+fn resolve_target_branch_from_sources(
+    prefix: &str,
+    name_arg: Option<&str>,
+    vcs_ref: Option<&str>,
+    missing_vcs_fallback: Option<&str>,
+) -> Result<(String, bool), String> {
+    let (raw_suffix, used_fallback) = if let Some(name) = name_arg {
+        (name, false)
+    } else if let Some(vcs_ref) = vcs_ref {
+        (vcs_ref, false)
+    } else if let Some(fallback) = missing_vcs_fallback {
+        (fallback, true)
     } else {
-        let vcs_ref = get_current_vcs_branch_or_revision()
-            .ok_or_else(|| "Failed to query current Git branch or Jujutsu revision. Please specify branch name argument.".to_string())?;
-        identity::slugify(&vcs_ref)
+        return Err("Failed to query current Git branch or Jujutsu revision. Please specify branch name argument.".to_string());
     };
+    let suffix = identity::slugify(raw_suffix);
 
     if suffix.is_empty() {
         return Err("Resolved target branch suffix is empty".to_string());
     }
 
     if suffix == prefix || suffix.starts_with(&format!("{}-", prefix)) {
-        return Ok(suffix);
+        return Ok((suffix, used_fallback));
     }
-    Ok(format!("{}-{}", prefix, suffix))
+    Ok((format!("{}-{}", prefix, suffix), used_fallback))
+}
+
+/// Resolves full target branch name `<prefix>-<suffix>` using Smart Identity Resolution Algorithm.
+fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
+    let prefix = identity::resolve_identity().map_err(|e| e.to_string())?;
+    let vcs_ref = if name_arg.is_none() {
+        get_current_vcs_branch_or_revision()
+    } else {
+        None
+    };
+
+    resolve_target_branch_from_sources(&prefix, name_arg, vcs_ref.as_deref(), None)
+        .map(|(branch_name, _)| branch_name)
+}
+
+/// Resolves the URL command's branch, falling back when no local VCS ref is available.
+fn resolve_url_target_branch(name_arg: Option<&str>) -> Result<(String, bool), String> {
+    let prefix = identity::resolve_identity().map_err(|e| e.to_string())?;
+    let vcs_ref = if name_arg.is_none() {
+        get_current_vcs_branch_or_revision()
+    } else {
+        None
+    };
+
+    resolve_target_branch_from_sources(
+        &prefix,
+        name_arg,
+        vcs_ref.as_deref(),
+        Some(NO_BRANCH_SUFFIX),
+    )
 }
 
 fn psql_command(connection_url: &str, args: &[OsString]) -> Command {
@@ -355,13 +393,19 @@ fn main() -> std::io::Result<()> {
             } else {
                 config.auto_prune
             };
-            let branch_name = match resolve_target_branch(name.as_deref()) {
-                Ok(b) => b,
+            let (branch_name, used_fallback) = match resolve_url_target_branch(name.as_deref()) {
+                Ok(resolution) => resolution,
                 Err(e) => {
                     log::error(&e)?;
                     std::process::exit(1);
                 }
             };
+            if used_fallback {
+                log::warning(format!(
+                    "Could not determine the current Git branch or Jujutsu revision; using '{}' as the branch suffix.",
+                    NO_BRANCH_SUFFIX
+                ))?;
+            }
 
             // 1. Check local cache first for sub-millisecond retrieval
             if let Some(cached_url) = cache::get_cached_url(&branch_name) {
@@ -1707,6 +1751,34 @@ mod tests {
         // 2. Passing already prefixed string
         let res2 = resolve_target_branch(Some("me-fiws-net-nkotxwxwpswz")).unwrap();
         assert_eq!(res2, "me-fiws-net-nkotxwxwpswz");
+    }
+
+    #[test]
+    fn test_url_target_branch_source_precedence_and_fallback() {
+        let explicit = resolve_target_branch_from_sources(
+            "test-user",
+            Some("explicit"),
+            Some("vcs-ref"),
+            Some(NO_BRANCH_SUFFIX),
+        )
+        .unwrap();
+        assert_eq!(explicit, ("test-user-explicit".to_string(), false));
+
+        let vcs = resolve_target_branch_from_sources(
+            "test-user",
+            None,
+            Some("vcs-ref"),
+            Some(NO_BRANCH_SUFFIX),
+        )
+        .unwrap();
+        assert_eq!(vcs, ("test-user-vcs-ref".to_string(), false));
+
+        let fallback =
+            resolve_target_branch_from_sources("test-user", None, None, Some(NO_BRANCH_SUFFIX))
+                .unwrap();
+        assert_eq!(fallback, ("test-user-nobranch".to_string(), true));
+
+        assert!(resolve_target_branch_from_sources("test-user", None, None, None).is_err());
     }
 
     #[test]

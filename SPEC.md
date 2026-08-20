@@ -203,8 +203,8 @@ USAGE:
     xatan url [OPTIONS] [NAME]
 
 ARGS:
-    <NAME>    The suffix of the target branch. If omitted, defaults
-              to the slugified name of the active Git branch.
+    <NAME>    The suffix of the target branch. If omitted, defaults to the
+              slugified active Git branch or Jujutsu revision, then `nobranch`.
 
 OPTIONS:
     --create              Auto-create the branch in Xata if it does not exist (default)
@@ -218,7 +218,7 @@ OPTIONS:
   1. Determine developer prefix (e.g., `jane-doe`).
   2. Determine target branch suffix:
      * If argument `[NAME]` is specified: Slugify the argument.
-     * If argument `[NAME]` is omitted: Query the current local Git branch (e.g., `git branch --show-current`). Slugify the branch name.
+     * If argument `[NAME]` is omitted: Query the current local Git branch or Jujutsu revision and slugify it. If neither can be determined, write a warning to `stderr` and use `nobranch` as the suffix.
   3. Concatenate: `<prefix>-<suffix>` (e.g., `jane-doe-feature-login`).
   4. Query Xata API to see if `<prefix>-<suffix>` exists.
   5. **Branch Exists:** Retrieve its connection URL, write it to `stdout`, and exit `0`.
