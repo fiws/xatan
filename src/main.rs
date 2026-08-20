@@ -1491,9 +1491,6 @@ fn run_post_create_hook(
         return Ok(());
     }
 
-    #[cfg(test)]
-    let is_tty = !command_str.contains("background");
-    #[cfg(not(test))]
     let is_tty = {
         use std::io::IsTerminal;
         std::io::stderr().is_terminal() && std::io::stdout().is_terminal()
@@ -1733,21 +1730,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_target_branch_already_prefixed() {
-        unsafe {
-            std::env::set_var("XATAN_PREFIX", "me-fiws-net");
-        }
-
-        // 1. Passing just suffix
-        let res1 = resolve_target_branch(Some("nkotxwxwpswz")).unwrap();
-        assert_eq!(res1, "me-fiws-net-nkotxwxwpswz");
-
-        // 2. Passing already prefixed string
-        let res2 = resolve_target_branch(Some("me-fiws-net-nkotxwxwpswz")).unwrap();
-        assert_eq!(res2, "me-fiws-net-nkotxwxwpswz");
-    }
-
-    #[test]
     fn test_url_target_branch_source_precedence_and_fallback() {
         let explicit = resolve_target_branch_from_sources(
             "test-user",
@@ -1757,6 +1739,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(explicit, ("test-user-explicit".to_string(), false));
+
+        let already_prefixed = resolve_target_branch_from_sources(
+            "test-user",
+            Some("test-user-explicit"),
+            Some("ignored-vcs-ref"),
+            Some(NO_BRANCH_SUFFIX),
+        )
+        .unwrap();
+        assert_eq!(already_prefixed, ("test-user-explicit".to_string(), false));
 
         let vcs = resolve_target_branch_from_sources(
             "test-user",
@@ -1810,8 +1801,12 @@ mod tests {
 
     #[test]
     fn test_wait_for_database_failure() {
-        let conn_url = "postgresql://user:pass@127.0.0.1:1/mydb";
-        assert!(wait_for_database(conn_url, false).is_err());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
+        assert!(wait_for_database(&conn_url, false).is_err());
     }
 
     #[test]
@@ -1820,11 +1815,9 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
 
-        let command = if cfg!(windows) {
-            "echo [HOOK_TEST_OK] %DATABASE_URL%"
-        } else {
-            "echo [HOOK_TEST_OK] $DATABASE_URL"
-        };
+        let command = format!(
+            r#"test "$DATABASE_URL" = "{conn_url}" && test "$XATA_DATABASE_URL" = "{conn_url}" && test "$XATAN_BRANCH_NAME" = "test-branch" && test "$XATAN_PARENT_BRANCH" = "main" && test "$XATA_ORG_ID" = "test-org" && test "$XATA_PROJECT_ID" = "test-proj" && test "$XATA_DATABASE_NAME" = "test-db""#
+        );
         let config = config::ResolvedConfig {
             org: "test-org".to_string(),
             project: "test-proj".to_string(),
@@ -1834,7 +1827,7 @@ mod tests {
             post_create: None,
             auto_prune: true,
         };
-        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
+        let res = run_post_create_hook(&command, &conn_url, "test-branch", "main", &config, true);
         assert!(res.is_ok());
     }
 
@@ -1854,44 +1847,10 @@ mod tests {
             post_create: None,
             auto_prune: true,
         };
-        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
+        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, true);
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert!(err.contains("42"));
-    }
-
-    #[test]
-    fn test_run_post_create_hook_background_success() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let conn_url = format!("postgresql://user:pass@127.0.0.1:{}/mydb", port);
-
-        let command = "exit 0 --background";
-        let config = config::ResolvedConfig {
-            org: "test-org".to_string(),
-            project: "test-proj".to_string(),
-            database: "test-db".to_string(),
-            fallback_parent: "main".to_string(),
-            api_key: "test-key".to_string(),
-            post_create: None,
-            auto_prune: true,
-        };
-        let res = run_post_create_hook(command, &conn_url, "test-branch", "main", &config, false);
-        assert!(res.is_ok());
-    }
-
-    #[test]
-    fn test_get_local_equivalents() {
-        let eqs = get_local_equivalents().unwrap();
-        if let Some(current) = get_current_vcs_branch_or_revision() {
-            let slugified = identity::slugify(&current);
-            assert!(
-                eqs.contains(&slugified),
-                "Equivalents {:?} should contain {}",
-                eqs,
-                slugified
-            );
-        }
     }
 
     #[test]

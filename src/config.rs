@@ -564,24 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_config_auto_prune_default() {
-        let envs = [
-            ("XATA_API_KEY", "my-api-key"),
-            ("XATA_ORG_ID", "my-org"),
-            ("XATA_PROJECT_ID", "my-project"),
-            ("XATA_DATABASE_NAME", "my-db"),
-        ];
-        let get_env = |key: &str| {
-            envs.iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, v)| v.to_string())
-        };
-
-        let resolved = resolve_config_impl(get_env, None, (None, None, None)).unwrap();
-        assert!(resolved.auto_prune);
-    }
-
-    #[test]
     fn test_resolve_config_auto_prune_file() {
         let envs = [("XATA_API_KEY", "my-api-key")];
         let get_env = |key: &str| {

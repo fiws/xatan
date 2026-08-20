@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn test_fnv1a_64() {
         assert_eq!(fnv1a_64(b""), 0xcbf29ce484222325);
-        assert_eq!(fnv1a_64(b"hello"), fnv1a_64(b"hello"));
-        assert_ne!(fnv1a_64(b"hello"), fnv1a_64(b"world"));
+        assert_eq!(fnv1a_64(b"hello"), 0xa430d84680aabd0b);
+        assert_eq!(fnv1a_64(b"foobar"), 0x85944171f73967e8);
     }
 
     #[test]
