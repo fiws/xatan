@@ -29,6 +29,8 @@ export XATA_PROJECT_ID="your-project-id"
 export XATA_DATABASE_NAME="your-db"
 ```
 
+The API key must include the `credentials:read` scope. `xatan` retrieves connection strings from Xata's branch credentials endpoint, adds `sslmode=require` when the endpoint omits an SSL mode, and preserves other URL parameters. The `connectionString` field on branch metadata is deprecated.
+
 If you prefer a file-based configuration, run:
 
 ```bash
@@ -36,6 +38,8 @@ xatan init
 ```
 
 This will walk you through a quick interactive setup and write a `.xatanrc` to your repository root.
+
+The default parent branch is `main`. Configure another default with `"defaultParent": "develop"` in `.xatanrc`/`xatan.json` or with `XATAN_DEFAULT_PARENT=develop`. The `--parent` flag for `url` and `create`, and `--from` for `recreate`, override the configured default.
 
 ## Commands
 

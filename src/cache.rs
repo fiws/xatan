@@ -1,10 +1,23 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+const CACHE_VERSION: u8 = 2;
+
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct XatanCache {
+    #[serde(default)]
+    version: u8,
     pub branches: HashMap<String, String>,
+}
+
+impl Default for XatanCache {
+    fn default() -> Self {
+        Self {
+            version: CACHE_VERSION,
+            branches: HashMap::new(),
+        }
+    }
 }
 
 fn fnv1a_64(data: &[u8]) -> u64 {
@@ -35,6 +48,13 @@ fn get_cache_path() -> Option<PathBuf> {
     Some(xatan_cache_dir.join(filename))
 }
 
+fn parse_cache(content: &str) -> XatanCache {
+    serde_json::from_str::<XatanCache>(content)
+        .ok()
+        .filter(|cache| cache.version == CACHE_VERSION)
+        .unwrap_or_default()
+}
+
 pub fn load_cache() -> XatanCache {
     let Some(path) = get_cache_path().filter(|p| p.exists()) else {
         return XatanCache::default();
@@ -44,7 +64,7 @@ pub fn load_cache() -> XatanCache {
         return XatanCache::default();
     };
 
-    serde_json::from_str::<XatanCache>(&content).unwrap_or_default()
+    parse_cache(&content)
 }
 
 pub fn save_cache(cache: &XatanCache) {
@@ -109,5 +129,15 @@ mod tests {
 
         // Ensure same path yields same filename
         assert_eq!(get_cache_filename(path1), file1);
+    }
+
+    #[test]
+    fn test_legacy_cache_is_invalidated() {
+        let cache = parse_cache(
+            r#"{"branches":{"main":"postgresql://xata@example-deprecated.xata.tech/postgres"}}"#,
+        );
+
+        assert!(cache.branches.is_empty());
+        assert_eq!(cache.version, CACHE_VERSION);
     }
 }

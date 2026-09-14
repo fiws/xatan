@@ -335,12 +335,12 @@ fn run_psql(name: Option<&str>, args: &[OsString]) -> std::io::Result<()> {
         }
     };
 
-    let Some(conn_str) = branch.connection_string else {
-        log::error(format!(
-            "Branch '{}' exists but has no connection URL.",
-            branch_name
-        ))?;
-        std::process::exit(1);
+    let conn_str = match client.get_branch_connection_string(&branch.id) {
+        Ok(connection_string) => connection_string,
+        Err(e) => {
+            log::error(format!("Failed to retrieve branch credentials: {}", e))?;
+            std::process::exit(1);
+        }
     };
 
     let rewritten = rewrite_connection_string(&conn_str, &config.database);
@@ -417,12 +417,12 @@ fn main() -> std::io::Result<()> {
             };
 
             if let Some(branch) = branch {
-                let Some(conn_str) = branch.connection_string else {
-                    log::error(format!(
-                        "Branch '{}' exists but has no connection URL.",
-                        branch_name
-                    ))?;
-                    std::process::exit(1);
+                let conn_str = match client.get_branch_connection_string(&branch.id) {
+                    Ok(connection_string) => connection_string,
+                    Err(e) => {
+                        log::error(format!("Failed to retrieve branch credentials: {}", e))?;
+                        std::process::exit(1);
+                    }
                 };
                 let rewritten = rewrite_connection_string(&conn_str, &config.database);
                 cache::set_cached_url(&branch_name, &rewritten);
@@ -438,7 +438,7 @@ fn main() -> std::io::Result<()> {
                 std::process::exit(1);
             }
 
-            let parent_branch = parent.as_deref().unwrap_or(&config.fallback_parent);
+            let parent_branch = parent.as_deref().unwrap_or(&config.default_parent);
             let parent_id = resolve_parent_id(&client, parent_branch);
             use std::io::IsTerminal;
             let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
@@ -488,17 +488,15 @@ fn main() -> std::io::Result<()> {
                 }
             };
 
-            let conn_url = created_branch.connection_string.or_else(|| {
-                client
-                    .get_branch(&branch_name)
-                    .ok()
-                    .flatten()
-                    .and_then(|b| b.connection_string)
-            });
-
-            let Some(conn_str) = conn_url else {
-                log::error("Created branch but failed to retrieve credentials.")?;
-                std::process::exit(1);
+            let conn_str = match client.get_branch_connection_string(&created_branch.id) {
+                Ok(connection_string) => connection_string,
+                Err(e) => {
+                    log::error(format!(
+                        "Created branch but failed to retrieve credentials: {}",
+                        e
+                    ))?;
+                    std::process::exit(1);
+                }
             };
 
             let rewritten = rewrite_connection_string(&conn_str, &config.database);
@@ -565,7 +563,7 @@ fn main() -> std::io::Result<()> {
                 }
             }
 
-            let parent_branch = parent.as_deref().unwrap_or(&config.fallback_parent);
+            let parent_branch = parent.as_deref().unwrap_or(&config.default_parent);
             let parent_id = resolve_parent_id(&client, parent_branch);
             use std::io::IsTerminal;
             let is_tty = std::io::stderr().is_terminal() && std::io::stdout().is_terminal();
@@ -619,13 +617,7 @@ fn main() -> std::io::Result<()> {
                     .clone()
                     .or_else(find_convention_hook_file)
             {
-                let conn_url = created_branch.connection_string.or_else(|| {
-                    client
-                        .get_branch(&branch_name)
-                        .ok()
-                        .flatten()
-                        .and_then(|b| b.connection_string)
-                });
+                let conn_url = client.get_branch_connection_string(&created_branch.id).ok();
 
                 if let Some(conn_str) = conn_url {
                     let rewritten = rewrite_connection_string(&conn_str, &config.database);
@@ -803,7 +795,7 @@ fn main() -> std::io::Result<()> {
                 }
             };
 
-            let from_parent = from.as_deref().unwrap_or(&config.fallback_parent);
+            let from_parent = from.as_deref().unwrap_or(&config.default_parent);
 
             if !yes {
                 let _ = prompt::intro("Recreate Branch");
@@ -854,6 +846,7 @@ fn main() -> std::io::Result<()> {
                 log::error(format!("API Error: {}", e))?;
                 std::process::exit(1);
             }
+            cache::remove_cached_url(&branch_name);
 
             if let Some(s) = &spinner {
                 s.set_message(format!("Cloning new branch from '{}'...", from_parent));
@@ -873,13 +866,7 @@ fn main() -> std::io::Result<()> {
                 s.stop("Recreation complete.");
             }
 
-            let conn_url = created.connection_string.or_else(|| {
-                client
-                    .get_branch(&branch_name)
-                    .ok()
-                    .flatten()
-                    .and_then(|b| b.connection_string)
-            });
+            let conn_url = client.get_branch_connection_string(&created.id).ok();
 
             if let Some(conn_str) = conn_url {
                 let rewritten = rewrite_connection_string(&conn_str, &config.database);
@@ -1259,7 +1246,7 @@ fn run_init() -> Result<(), String> {
         org: Some(org.trim().to_string()),
         project: Some(project.trim().to_string()),
         database: Some(database.trim().to_string()),
-        fallback_parent: Some("main".to_string()),
+        default_parent: Some("main".to_string()),
         post_create: None,
         auto_prune: None,
     };
@@ -1292,20 +1279,42 @@ fn resolve_parent_id(client: &xata::XataClient, parent_name: &str) -> String {
     parent_name.to_string()
 }
 
-/// Rewrites the database name path segment in the connection URL to match XATA_DATABASE_NAME
+/// Rewrites the database name and enables TLS when the API omits an SSL mode.
 fn rewrite_connection_string(conn_str: &str, db_name: &str) -> String {
     if let Some(scheme_idx) = conn_str.find("://") {
         let rest = &conn_str[scheme_idx + 3..];
         if let Some(slash_idx) = rest.find('/') {
-            let path_and_query = &rest[slash_idx + 1..];
-            let end_idx = path_and_query
+            let path_and_suffix = &rest[slash_idx + 1..];
+            let suffix_idx = path_and_suffix
                 .find('?')
-                .or_else(|| path_and_query.find('#'))
-                .unwrap_or(path_and_query.len());
-            let query_part = &path_and_query[end_idx..];
-            let host_part = &rest[..slash_idx];
-            let scheme = &conn_str[..scheme_idx + 3];
-            return format!("{}{}/{}{}", scheme, host_part, db_name, query_part);
+                .or_else(|| path_and_suffix.find('#'))
+                .unwrap_or(path_and_suffix.len());
+            let suffix = &path_and_suffix[suffix_idx..];
+            let fragment_idx = suffix.find('#').unwrap_or(suffix.len());
+            let query = &suffix[..fragment_idx];
+            let fragment = &suffix[fragment_idx..];
+            let has_ssl_mode = query.strip_prefix('?').is_some_and(|parameters| {
+                parameters
+                    .split('&')
+                    .any(|parameter| parameter == "sslmode" || parameter.starts_with("sslmode="))
+            });
+
+            let mut rewritten = String::with_capacity(conn_str.len() + db_name.len() + 17);
+            rewritten.push_str(&conn_str[..scheme_idx + 3]);
+            rewritten.push_str(&rest[..slash_idx]);
+            rewritten.push('/');
+            rewritten.push_str(db_name);
+            rewritten.push_str(query);
+            if !has_ssl_mode {
+                if query.is_empty() {
+                    rewritten.push('?');
+                } else if !query.ends_with('?') && !query.ends_with('&') {
+                    rewritten.push('&');
+                }
+                rewritten.push_str("sslmode=require");
+            }
+            rewritten.push_str(fragment);
+            return rewritten;
         }
     }
     conn_str.to_string()
@@ -1767,6 +1776,28 @@ mod tests {
     }
 
     #[test]
+    fn test_rewrite_connection_string_preserves_query_and_requires_ssl() {
+        assert_eq!(
+            rewrite_connection_string("postgresql://user:pass@host:5432/postgres", "application"),
+            "postgresql://user:pass@host:5432/application?sslmode=require"
+        );
+        assert_eq!(
+            rewrite_connection_string(
+                "postgresql://user:pass@host:5432/postgres?application_name=xatan#settings",
+                "application"
+            ),
+            "postgresql://user:pass@host:5432/application?application_name=xatan&sslmode=require#settings"
+        );
+        assert_eq!(
+            rewrite_connection_string(
+                "postgresql://user:pass@host:5432/postgres?sslmode=verify-full&application_name=xatan",
+                "application"
+            ),
+            "postgresql://user:pass@host:5432/application?sslmode=verify-full&application_name=xatan"
+        );
+    }
+
+    #[test]
     fn test_parse_host_port() {
         assert_eq!(
             parse_host_port("postgresql://user:pass@localhost:5432/mydb"),
@@ -1822,7 +1853,7 @@ mod tests {
             org: "test-org".to_string(),
             project: "test-proj".to_string(),
             database: "test-db".to_string(),
-            fallback_parent: "main".to_string(),
+            default_parent: "main".to_string(),
             api_key: "test-key".to_string(),
             post_create: None,
             auto_prune: true,
@@ -1842,7 +1873,7 @@ mod tests {
             org: "test-org".to_string(),
             project: "test-proj".to_string(),
             database: "test-db".to_string(),
-            fallback_parent: "main".to_string(),
+            default_parent: "main".to_string(),
             api_key: "test-key".to_string(),
             post_create: None,
             auto_prune: true,
