@@ -1,6 +1,6 @@
 [package]
 name = "xatan"
-version = "0.1.6-dev"
+version = "0.1.6"
 edition = "2024"
 
 [dependencies]
