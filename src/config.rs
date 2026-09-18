@@ -7,7 +7,7 @@ pub struct XatanConfig {
     pub org: Option<String>,
     pub project: Option<String>,
     pub database: Option<String>,
-    pub fallback_parent: Option<String>,
+    pub default_parent: Option<String>,
     pub post_create: Option<String>,
     #[serde(
         default,
@@ -54,7 +54,7 @@ pub struct ResolvedConfig {
     pub org: String,
     pub project: String,
     pub database: String,
-    pub fallback_parent: String,
+    pub default_parent: String,
     pub api_key: String,
     pub post_create: Option<String>,
     pub auto_prune: bool,
@@ -117,7 +117,7 @@ where
     let file_org = config_file.as_ref().and_then(|c| c.org.clone());
     let file_project = config_file.as_ref().and_then(|c| c.project.clone());
     let file_database = config_file.as_ref().and_then(|c| c.database.clone());
-    let file_fallback_parent = config_file.as_ref().and_then(|c| c.fallback_parent.clone());
+    let file_default_parent = config_file.as_ref().and_then(|c| c.default_parent.clone());
     let file_post_create = config_file.as_ref().and_then(|c| c.post_create.clone());
     let file_auto_prune = config_file.as_ref().and_then(|c| c.auto_prune);
 
@@ -143,8 +143,8 @@ where
         .filter(|s| !s.trim().is_empty())
         .ok_or(ConfigError::MissingDatabase)?;
 
-    let fallback_parent = get_env("XATAN_FALLBACK_PARENT")
-        .or(file_fallback_parent)
+    let default_parent = get_env("XATAN_DEFAULT_PARENT")
+        .or(file_default_parent)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| "main".to_string());
 
@@ -168,7 +168,7 @@ where
         org: org.trim().to_string(),
         project: project.trim().to_string(),
         database: database.trim().to_string(),
-        fallback_parent: fallback_parent.trim().to_string(),
+        default_parent: default_parent.trim().to_string(),
         api_key: api_key.trim().to_string(),
         post_create,
         auto_prune,
@@ -283,7 +283,7 @@ mod tests {
             ("XATA_ORG_ID", "my-org"),
             ("XATA_PROJECT_ID", "my-project"),
             ("XATA_DATABASE_NAME", "my-db"),
-            ("XATAN_FALLBACK_PARENT", "my-parent"),
+            ("XATAN_DEFAULT_PARENT", "my-parent"),
         ];
         let get_env = |key: &str| {
             envs.iter()
@@ -298,7 +298,7 @@ mod tests {
                 org: "my-org".to_string(),
                 project: "my-project".to_string(),
                 database: "my-db".to_string(),
-                fallback_parent: "my-parent".to_string(),
+                default_parent: "my-parent".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
                 auto_prune: true,
@@ -315,14 +315,15 @@ mod tests {
                 .map(|(_, v)| v.to_string())
         };
 
-        let file_config = XatanConfig {
-            org: Some("file-org".to_string()),
-            project: Some("file-project".to_string()),
-            database: Some("file-db".to_string()),
-            fallback_parent: Some("file-parent".to_string()),
-            post_create: None,
-            auto_prune: None,
-        };
+        let file_config: XatanConfig = serde_json::from_str(
+            r#"{
+                "org": "file-org",
+                "project": "file-project",
+                "database": "file-db",
+                "defaultParent": "file-parent"
+            }"#,
+        )
+        .unwrap();
 
         let resolved = resolve_config_impl(get_env, Some(file_config), (None, None, None)).unwrap();
         assert_eq!(
@@ -331,7 +332,7 @@ mod tests {
                 org: "file-org".to_string(),
                 project: "file-project".to_string(),
                 database: "file-db".to_string(),
-                fallback_parent: "file-parent".to_string(),
+                default_parent: "file-parent".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
                 auto_prune: true,
@@ -357,7 +358,7 @@ mod tests {
             org: Some("file-org".to_string()),
             project: Some("file-project".to_string()),
             database: Some("file-db".to_string()),
-            fallback_parent: Some("file-parent".to_string()),
+            default_parent: Some("file-parent".to_string()),
             post_create: None,
             auto_prune: None,
         };
@@ -369,7 +370,7 @@ mod tests {
                 org: "env-org".to_string(),
                 project: "file-project".to_string(),
                 database: "env-db".to_string(),
-                fallback_parent: "file-parent".to_string(),
+                default_parent: "file-parent".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
                 auto_prune: true,
@@ -490,7 +491,7 @@ mod tests {
                 org: "def-org".to_string(),
                 project: "def-proj".to_string(),
                 database: "def-db".to_string(),
-                fallback_parent: "main".to_string(),
+                default_parent: "main".to_string(),
                 api_key: "my-api-key".to_string(),
                 post_create: None,
                 auto_prune: true,
@@ -530,7 +531,7 @@ mod tests {
             org: Some("file-org".to_string()),
             project: Some("file-project".to_string()),
             database: Some("file-db".to_string()),
-            fallback_parent: None,
+            default_parent: None,
             post_create: Some("sh ./file_hook.sh".to_string()),
             auto_prune: None,
         };
@@ -554,7 +555,7 @@ mod tests {
             org: Some("file-org".to_string()),
             project: Some("file-project".to_string()),
             database: Some("file-db".to_string()),
-            fallback_parent: None,
+            default_parent: None,
             post_create: Some("sh ./file_hook.sh".to_string()),
             auto_prune: None,
         };
@@ -624,7 +625,7 @@ mod tests {
             org: Some("file-org".to_string()),
             project: Some("file-project".to_string()),
             database: Some("file-db".to_string()),
-            fallback_parent: None,
+            default_parent: None,
             post_create: None,
             auto_prune: Some(true),
         };

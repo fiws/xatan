@@ -8,13 +8,16 @@ pub struct XataBranch {
     pub created_at: Option<String>,
     #[serde(rename = "parentID")]
     pub parent_id: Option<String>,
-    #[serde(rename = "connectionString")]
-    pub connection_string: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct XataBranchesResponse {
     pub branches: Vec<XataBranch>,
+}
+#[derive(Debug, Deserialize)]
+struct BranchCredentials {
+    #[serde(rename = "connectionString")]
+    connection_string: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -144,6 +147,34 @@ impl XataClient {
 
         Ok(Some(branch))
     }
+    /// Retrieves the current connection string for a branch.
+    pub fn get_branch_connection_string(&self, branch_id: &str) -> Result<String, XataError> {
+        let url = format!(
+            "{}/organizations/{}/projects/{}/branches/{}/credentials",
+            self.base_url, self.org, self.project, branch_id
+        );
+
+        let response = match self
+            .client()
+            .get(&url)
+            .set("Authorization", &format!("Bearer {}", self.api_key))
+            .call()
+        {
+            Ok(resp) => resp,
+            Err(ureq::Error::Status(_code, resp)) => resp,
+            Err(err) => return Err(err.into()),
+        };
+
+        if response.status() < 200 || response.status() >= 300 {
+            return Err(self.handle_error_response(response));
+        }
+
+        let credentials: BranchCredentials = response
+            .into_json()
+            .map_err(|e| XataError::Parse(e.to_string()))?;
+
+        Ok(credentials.connection_string)
+    }
 
     /// Creates a new branch, optionally inheriting from a parent branch.
     pub fn create_branch(
@@ -265,7 +296,7 @@ mod tests {
             org: "test-org".to_string(),
             project: "test-proj".to_string(),
             database: "test-db".to_string(),
-            fallback_parent: "main".to_string(),
+            default_parent: "main".to_string(),
             api_key: "test-key".to_string(),
             post_create: None,
             auto_prune: true,
@@ -288,8 +319,7 @@ mod tests {
                 "id": "my-branch",
                 "name": "my-branch",
                 "createdAt": "2023-11-07T05:31:56Z",
-                "parentID": "main",
-                "connectionString": "postgresql://test"
+                "parentID": "main"
             }"#,
             )
             .create();
@@ -304,7 +334,6 @@ mod tests {
                 name: "my-branch".to_string(),
                 created_at: Some("2023-11-07T05:31:56Z".to_string()),
                 parent_id: Some("main".to_string()),
-                connection_string: Some("postgresql://test".to_string()),
             })
         );
         mock.assert();
@@ -325,6 +354,38 @@ mod tests {
         let res = client.get_branch("missing-branch").unwrap();
 
         assert_eq!(res, None);
+        mock.assert();
+    }
+    #[test]
+    fn test_get_branch_connection_string_success() {
+        let mut server = Server::new();
+        let mock = server
+            .mock(
+                "GET",
+                "/organizations/test-org/projects/test-proj/branches/branch-id/credentials",
+            )
+            .match_header("Authorization", "Bearer test-key")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                "username": "xata",
+                "password": "secret",
+                "hostname": "branch-id.eu-central-1.xata.tech",
+                "port": 5432,
+                "dbname": "postgres",
+                "connectionString": "postgresql://xata:secret@branch-id.eu-central-1.xata.tech:5432/postgres"
+            }"#,
+            )
+            .create();
+
+        let client = XataClient::new(&test_config()).with_base_url(server.url());
+        let connection_string = client.get_branch_connection_string("branch-id").unwrap();
+
+        assert_eq!(
+            connection_string,
+            "postgresql://xata:secret@branch-id.eu-central-1.xata.tech:5432/postgres"
+        );
         mock.assert();
     }
 
@@ -361,7 +422,6 @@ mod tests {
                 name: "new-branch".to_string(),
                 created_at: None,
                 parent_id: Some("main".to_string()),
-                connection_string: None,
             }
         );
         mock.assert();

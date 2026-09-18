@@ -107,7 +107,7 @@ Implementations read configuration from a file named `.xatanrc` or `xatan.json` 
       "type": "string",
       "description": "The default Xata Database name"
     },
-    "fallbackParent": {
+    "defaultParent": {
       "type": "string",
       "description": "The default parent branch to clone from when creating new branches",
       "default": "main"
@@ -134,23 +134,23 @@ To support seamless CI/CD, scripting, and manual override capabilities, `xatan` 
 All commands interacting with the Xata API (including `url`, `create`, `list`, `recreate`, `delete`, and `shell`) require authentication.
 * **API Key:** `xatan` expects the **`XATA_API_KEY`** environment variable to be set for authentication.
 * If `XATA_API_KEY` is missing or empty when executing an API-interacting command, the tool MUST print a structured error message to `stderr` and exit with code `3` (Authentication / Config Missing).
+* **Credential Scope:** Commands that retrieve a connection URL (`url`, `psql`, `shell`, and post-creation hooks) require the API key's `credentials:read` scope and MUST use the branch credentials endpoint rather than the deprecated branch metadata `connectionString` field.
 
 #### 2. Settings Resolution Priority
-`xatan` resolves each of the key properties (`org`, `project`, `database`, `fallbackParent`) dynamically in the following order of precedence (highest to lowest):
+`xatan` resolves each of the key properties (`org`, `project`, `database`, `defaultParent`) dynamically in the following order of precedence (highest to lowest):
 
 1. **Environment Variables:**
    * `org` $\leftarrow$ `XATA_ORG_ID`
    * `project` $\leftarrow$ `XATA_PROJECT_ID`
    * `database` $\leftarrow$ `XATA_DATABASE_NAME` (with fallback to `XATA_DATABASE`)
-   * `fallbackParent` $\leftarrow$ `XATAN_FALLBACK_PARENT`
+   * `defaultParent` $\leftarrow$ `XATAN_DEFAULT_PARENT`
    * `postCreate` $\leftarrow$ `XATAN_POST_CREATE`
 2. **Local Configuration File:**
    * Checks for `.xatanrc` or `xatan.json` in the current repository root/working directory or any parent directories.
    * If found, parses it as JSON.
    * Uses any values present in the file to resolve keys that have not already been supplied by environment variables.
 3. **Defaults:**
-   * `fallbackParent` defaults to `main` if undefined by both environment variables and files.
-   * `fallbackParent` defaults to `main` if undefined by both environment variables and files.
+   * `defaultParent` defaults to `main` if undefined by both environment variables and files.
 
 #### 4. Post-Creation Database Hook Discovery (Zero-Config)
 If `postCreate` is not explicitly configured via environment variables or a configuration file, `xatan` automatically performs zero-config hook discovery. It recursively looks for the repository root (containing `.git` or `.jj`) and checks for an executable or script inside the `.xata/` directory:
@@ -220,9 +220,9 @@ OPTIONS:
      * If argument `[NAME]` is omitted: Query the current local Git branch or Jujutsu revision and slugify it. If neither can be determined, write a warning to `stderr` and use `nobranch` as the suffix.
   3. Concatenate: `<prefix>-<suffix>` (e.g., `jane-doe-feature-login`).
   4. Query Xata API to see if `<prefix>-<suffix>` exists.
-  5. **Branch Exists:** Retrieve its connection URL, write it to `stdout`, and exit `0`.
+  5. **Branch Exists:** Retrieve its connection URL from the branch credentials endpoint, preserve its query parameters, add `sslmode=require` if absent, write it to `stdout`, and exit `0`.
   6. **Branch is Missing:**
-     * If `--no-create` is not set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, trigger background prune (unless disabled via `--no-prune` or config), execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL, write it to `stdout`, and exit `0`.
+     * If `--no-create` is not set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, trigger background prune (unless disabled via `--no-prune` or config), execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL from the branch credentials endpoint, preserve its query parameters, add `sslmode=require` if absent, write it to `stdout`, and exit `0`.
 * **Exit Codes:**
   * `0`: Success (printed URL to stdout).
   * `1`: General Error (invalid configuration, missing network).
