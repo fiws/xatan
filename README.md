@@ -20,7 +20,36 @@ cargo install --git https://github.com/fiws/xatan
 
 ## Setup & Configuration
 
-Configure `xatan` via environment variables (ideal for CI/CD or `.env` files):
+### 1. Authentication (`XATA_API_KEY`)
+
+All commands interacting with the Xata API require authentication via the `XATA_API_KEY` environment variable. The API key must include the `credentials:read` scope. `xatan` retrieves connection strings from Xata's branch credentials endpoint, adds `sslmode=require` when the endpoint omits an SSL mode, and preserves other URL parameters.
+
+Because the API key is a secret credential, **never commit it to version control**. Recommend storing it securely using one of the following methods:
+
+- **In `mise.local.toml`** (local per-repo config, gitignored):
+  ```toml
+  # mise.local.toml
+  [env]
+  XATA_API_KEY = "xau_..."
+  ```
+- **Via a secret manager or password manager CLI** in `mise.local.toml`:
+  ```toml
+  # mise.local.toml
+  [env]
+  # 1Password CLI
+  XATA_API_KEY = "{{ exec(command='op read op://private/xata/credential') }}"
+  # Or Bitwarden / pass / gcloud / etc.
+  # XATA_API_KEY = "{{ exec(command='bw get password xata-api-key') }}"
+  # XATA_API_KEY = "{{ exec(command='pass show xata/api-key') }}"
+  ```
+- **In user-level shell configuration or secret store** (e.g., `~/.zshrc`, `~/.bashrc`):
+  ```bash
+  export XATA_API_KEY="xau_..."
+  ```
+
+### 2. Workspace & Database Configuration
+
+Configure project settings via environment variables (ideal for CI/CD or `.env` files):
 
 ```bash
 export XATA_API_KEY="xau_..."
@@ -28,8 +57,6 @@ export XATA_ORG_ID="your-org"
 export XATA_PROJECT_ID="your-project-id"
 export XATA_DATABASE_NAME="your-db"
 ```
-
-The API key must include the `credentials:read` scope. `xatan` retrieves connection strings from Xata's branch credentials endpoint, adds `sslmode=require` when the endpoint omits an SSL mode, and preserves other URL parameters. The `connectionString` field on branch metadata is deprecated.
 
 If you prefer a file-based configuration, run:
 
@@ -40,7 +67,6 @@ xatan init
 This will walk you through a quick interactive setup and write a `.xatanrc` to your repository root.
 
 The default parent branch is `main`. Configure another default with `"defaultParent": "develop"` in `.xatanrc`/`xatan.json` or with `XATAN_DEFAULT_PARENT=develop`. The `--parent` flag for `url` and `create`, and `--from` for `recreate`, override the configured default.
-
 ## Commands
 
 - **`whoami`**: Prints your resolved developer identity prefix (e.g., `jane-doe`).
@@ -82,16 +108,15 @@ Integrating `xatan` with `mise` gives you a completely automated local developme
 
 ### Auto-inject dynamic `DATABASE_URL`
 
-Configure `mise` to dynamically resolve your isolated developer branch and inject its connection string on directory entry. Because `xatan` caches URLs locally, this is virtually instantaneous:
+Configure `mise` to dynamically resolve your isolated developer branch and inject its connection string on directory entry. When referencing `xatan` (installed via mise tools) in `[env]`, set `tools = true` so mise loads the tools on the `PATH` before evaluating the template; otherwise, the command will fail:
 
 ```toml
-# mise.toml
+# mise.toml or mise.local.toml
 [env]
-DATABASE_URL = "{{ exec(command='xatan url') }}"
+DATABASE_URL = { value = "{{ exec(command='xatan url') }}", tools = true }
 ```
 
 Now, any tool, framework, or ORM (like Prisma, Drizzle, or `psql`) automatically targets your isolated sandbox with zero manual setup.
-
 ### Define convenient tasks
 
 ```toml
