@@ -70,7 +70,7 @@ The default parent branch is `main`. Configure another default with `"defaultPar
 ## Commands
 
 - **`whoami`**: Prints your resolved developer identity prefix (e.g., `jane-doe`).
-- **`url [NAME]`**: Prints the Postgres connection URL for your branch. Without `NAME`, it uses the current Git branch or Jujutsu revision; if neither can be determined, it warns on `stderr` and uses the `nobranch` suffix. If the database branch doesn't exist, `xatan` automatically creates it first and prunes unneeded remote branches in the background (enabled by default; configurable via `autoPrune`/`XATAN_AUTO_PRUNE`). Pass `--no-create` to skip auto-creation, or `--no-prune` (`--skip-prune`) to skip background pruning.
+- **`url [NAME]`**: Prints the Postgres connection URL for your branch. Without `NAME`, it uses the current Git branch or Jujutsu revision and caches that ref per repository. If neither can be determined (for example, during a rebase), it warns on `stderr` and reuses the last cached ref; only repositories without a cached ref use the `nobranch` suffix. Explicit names override this resolution without replacing the cached ref. If the database branch doesn't exist, `xatan` automatically creates it first and prunes unneeded remote branches in the background (enabled by default; configurable via `autoPrune`/`XATAN_AUTO_PRUNE`). Pass `--no-create` to skip auto-creation, or `--no-prune` (`--skip-prune`) to skip background pruning.
 - **`create <NAME>`**: Creates an isolated database branch prefixed with your identity.
 - **`recreate [NAME]`**: Tears down and re-clones your branch from a parent (defaults to `main`), resetting your test data state.
 - **`delete [NAME]`**: Deletes your developer branch safely.

@@ -34,7 +34,7 @@ enum Commands {
 
     /// Resolves and prints the connection URL for a database branch
     Url {
-        /// The suffix of the target branch. Defaults to the current VCS ref, then `nobranch`.
+        /// The suffix of the target branch. Defaults to the current VCS ref, then the cached ref, then `nobranch`.
         name: Option<String>,
 
         /// Do not auto-create the branch in Xata if it does not exist
@@ -283,7 +283,10 @@ fn resolve_target_branch(name_arg: Option<&str>) -> Result<String, String> {
 }
 
 /// Resolves the URL command's branch, falling back when no local VCS ref is available.
-fn resolve_url_target_branch(name_arg: Option<&str>) -> Result<(String, bool), String> {
+fn resolve_url_target_branch(
+    name_arg: Option<&str>,
+    cache: &mut cache::XatanCache,
+) -> Result<(String, bool), String> {
     let prefix = identity::resolve_identity().map_err(|e| e.to_string())?;
     let vcs_ref = if name_arg.is_none() {
         get_current_vcs_branch_or_revision()
@@ -291,12 +294,21 @@ fn resolve_url_target_branch(name_arg: Option<&str>) -> Result<(String, bool), S
         None
     };
 
-    resolve_target_branch_from_sources(
+    let resolution = resolve_target_branch_from_sources(
         &prefix,
         name_arg,
         vcs_ref.as_deref(),
-        Some(NO_BRANCH_SUFFIX),
-    )
+        cache.last_vcs_ref.as_deref().or(Some(NO_BRANCH_SUFFIX)),
+    )?;
+
+    if let Some(vcs_ref) = vcs_ref
+        && cache.last_vcs_ref.as_deref() != Some(vcs_ref.as_str())
+    {
+        cache.last_vcs_ref = Some(vcs_ref);
+        cache::save_cache(cache);
+    }
+
+    Ok(resolution)
 }
 
 fn psql_command(connection_url: &str, args: &[OsString]) -> Command {
@@ -387,22 +399,24 @@ fn main() -> std::io::Result<()> {
             } else {
                 config.auto_prune
             };
-            let (branch_name, used_fallback) = match resolve_url_target_branch(name.as_deref()) {
-                Ok(resolution) => resolution,
-                Err(e) => {
-                    log::error(&e)?;
-                    std::process::exit(1);
-                }
-            };
+            let mut url_cache = cache::load_cache();
+            let (branch_name, used_fallback) =
+                match resolve_url_target_branch(name.as_deref(), &mut url_cache) {
+                    Ok(resolution) => resolution,
+                    Err(e) => {
+                        log::error(&e)?;
+                        std::process::exit(1);
+                    }
+                };
             if used_fallback {
                 log::warning(format!(
-                    "Could not determine the current Git branch or Jujutsu revision; using '{}' as the branch suffix.",
-                    NO_BRANCH_SUFFIX
+                    "Could not determine the current Git branch or Jujutsu revision; using '{}' as the database branch.",
+                    branch_name
                 ))?;
             }
 
             // 1. Check local cache first for sub-millisecond retrieval
-            if let Some(cached_url) = cache::get_cached_url(&branch_name) {
+            if let Some(cached_url) = url_cache.branches.get(&branch_name) {
                 println!("{}", cached_url);
                 std::process::exit(0);
             }
