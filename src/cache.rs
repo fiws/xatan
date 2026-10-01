@@ -9,6 +9,8 @@ pub struct XatanCache {
     #[serde(default)]
     version: u8,
     pub branches: HashMap<String, String>,
+    #[serde(default)]
+    pub last_vcs_ref: Option<String>,
 }
 
 impl Default for XatanCache {
@@ -16,6 +18,7 @@ impl Default for XatanCache {
         Self {
             version: CACHE_VERSION,
             branches: HashMap::new(),
+            last_vcs_ref: None,
         }
     }
 }

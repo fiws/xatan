@@ -204,7 +204,8 @@ USAGE:
 
 ARGS:
     <NAME>    The suffix of the target branch. If omitted, defaults to the
-              slugified active Git branch or Jujutsu revision, then `nobranch`.
+              slugified active Git branch or Jujutsu revision, then the last
+              cached VCS ref for this repository, then `nobranch`.
 
 OPTIONS:
     --no-create           Do not auto-create the branch in Xata if it does not exist
@@ -216,10 +217,10 @@ OPTIONS:
 * **Resolution Logic:**
   1. Determine developer prefix (e.g., `jane-doe`).
   2. Determine target branch suffix:
-     * If argument `[NAME]` is specified: Slugify the argument.
-     * If argument `[NAME]` is omitted: Query the current local Git branch or Jujutsu revision and slugify it. If neither can be determined, write a warning to `stderr` and use `nobranch` as the suffix.
+     * If argument `[NAME]` is specified: Slugify the argument without replacing the cached VCS ref.
+     * If argument `[NAME]` is omitted: Query the current local Git branch or Jujutsu revision and slugify it. Cache successfully resolved refs per repository, including when the connection URL is already cached. If neither can be determined (for example, during a rebase), write a warning to `stderr` and reuse the last cached VCS ref. Use `nobranch` only when no cached ref exists.
   3. Concatenate: `<prefix>-<suffix>` (e.g., `jane-doe-feature-login`).
-  4. Query Xata API to see if `<prefix>-<suffix>` exists.
+  4. Return the locally cached connection URL for the resolved branch if present; otherwise, query Xata API to see if `<prefix>-<suffix>` exists.
   5. **Branch Exists:** Retrieve its connection URL from the branch credentials endpoint, preserve its query parameters, add `sslmode=require` if absent, write it to `stdout`, and exit `0`.
   6. **Branch is Missing:**
      * If `--no-create` is not set: Invoke Xata API to create the branch (parenting from the specified `--parent` or fallback parent from config). Block until creation completes, trigger background prune (unless disabled via `--no-prune` or config), execute the post-creation hook (unless `--skip-post-create` is set), retrieve the connection URL from the branch credentials endpoint, preserve its query parameters, add `sslmode=require` if absent, write it to `stdout`, and exit `0`.
